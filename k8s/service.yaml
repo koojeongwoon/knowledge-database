@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: llm-wiki
+spec:
+  type: LoadBalancer  # OrbStack K8s는 LoadBalancer 타입을 감지하여 로컬 호스트 컴퓨터(localhost) 포트와 자동으로 브릿지해줍니다.
+  ports:
+    - port: 54320
+      targetPort: 5432
+  selector:
+    app: postgres-db

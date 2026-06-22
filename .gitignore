@@ -1,0 +1,50 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache & compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Local Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+k8s/secret.yaml
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor & IDE configurations
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# direnv cache
+.direnv/
+
+# Obsidian Configuration
+.obsidian/
+
+# Wiki Markdown Data & Assets
+qa/
+topics/
+assets/
+attachments/
+
+# Scratch & Temporary files
+scratch/
+*.log
+*.pid

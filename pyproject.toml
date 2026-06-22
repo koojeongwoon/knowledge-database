@@ -1,0 +1,18 @@
+[project]
+name = "knowledge-base"
+version = "0.1.0"
+description = "Obsidian + Agent based LLM-Wiki Knowledge Base"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "psycopg2-binary>=2.9.9",
+    "pgvector>=0.2.5",
+    "pyyaml>=6.0.1",
+    "python-dotenv>=1.0.1",
+    "openai>=1.35.0",
+    "sentence-transformers>=2.2.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
