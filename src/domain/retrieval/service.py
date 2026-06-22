@@ -2,9 +2,9 @@ import re
 import math
 from typing import List, Dict, Any
 from collections import defaultdict
-from src.database import DatabaseManager
-from src.embedding import BaseEmbeddingService
-from src.config import SIMILARITY_THRESHOLD, RERANKER_ENABLED, RERANKER_MODEL, RRF_K
+from src.infrastructure.database import DatabaseManager
+from src.domain.indexing.embedding import BaseEmbeddingService
+from src.core.config import SIMILARITY_THRESHOLD, RERANKER_ENABLED, RERANKER_MODEL, RRF_K
 
 
 class WikiSearcher:

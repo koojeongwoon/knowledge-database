@@ -7,6 +7,7 @@ load_dotenv(override=True)
 # 지식베이스(Obsidian Vault) 루트 디렉토리 설정 (기본값: 현재 디렉토리)
 WIKI_DIR = os.path.abspath(os.getenv("WIKI_DIR", "."))
 
+DB_TYPE = os.getenv("DB_TYPE", "postgres").lower()
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME", "knowledge_db")

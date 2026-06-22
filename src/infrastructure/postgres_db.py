@@ -4,9 +4,10 @@ from pgvector.psycopg2 import register_vector
 from typing import List, Dict, Any, Optional
 import json
 
-from src.config import DATABASE_URL, EMBEDDING_DIM
+from src.core.config import DATABASE_URL, EMBEDDING_DIM
+from src.infrastructure.base import BaseDatabaseManager
 
-class DatabaseManager:
+class PostgresDatabaseManager(BaseDatabaseManager):
     def __init__(self):
         self.conn = None
 

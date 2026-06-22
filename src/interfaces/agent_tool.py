@@ -1,9 +1,9 @@
 from typing import List, Dict, Any
 import json
-from src.database import DatabaseManager
-from src.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
-from src.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
-from src.searcher import WikiSearcher
+from src.infrastructure.database import DatabaseManager
+from src.domain.indexing.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
+from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
+from src.domain.retrieval.service import WikiSearcher
 
 def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
     """
@@ -196,10 +196,10 @@ def run_wiki_indexing() -> str:
     """
     로컬 마크다운 파일들을 스캔하여 최신 지식을 데이터베이스에 증분 인덱싱(임베딩)합니다.
     """
-    from src.database import DatabaseManager
-    from src.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
-    from src.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
-    from src.indexer import WikiIndexer
+    from src.infrastructure.database import DatabaseManager
+    from src.domain.indexing.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
+    from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
+    from src.domain.indexing.service import WikiIndexer
 
     root_dir = WIKI_DIR
     try:

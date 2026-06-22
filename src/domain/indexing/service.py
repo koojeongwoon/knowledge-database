@@ -2,9 +2,9 @@ import os
 import glob
 from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from src.parser import parse_markdown_file
-from src.database import DatabaseManager
-from src.embedding import BaseEmbeddingService
+from src.domain.wiki.parser import parse_markdown_file
+from src.infrastructure.database import DatabaseManager
+from src.domain.indexing.embedding import BaseEmbeddingService
 
 # 이 임계치를 초과하는 파일이 변경되었을 때 병렬 처리로 전환
 PARALLEL_THRESHOLD = 10
@@ -45,7 +45,7 @@ class WikiIndexer:
         병렬 실행 시 각 워커가 독립 db_manager를 전달받아 커넥션 충돌을 방지합니다.
         Returns: 'created' | 'updated'
         """
-        from src.parser import extract_wiki_links, split_markdown_by_headers, chunk_text
+        from src.domain.wiki.parser import extract_wiki_links, split_markdown_by_headers, chunk_text
 
         full_path = os.path.join(self.root_dir, rel_path)
         parsed_data = parse_markdown_file(full_path)
@@ -133,7 +133,7 @@ class WikiIndexer:
         
         # 0. 이미지 전처리 프로세스 실행 (사이드카 캐싱)
         try:
-            from src.image_processor import ImageProcessor
+            from src.domain.media.processor import ImageProcessor
             image_processor = ImageProcessor(root_dir=self.root_dir)
             image_stats = image_processor.process_images()
             print(f"[+] Image preprocessing completed. Stats: {image_stats}")

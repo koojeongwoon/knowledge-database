@@ -24,7 +24,7 @@ metadata:
 ## 2. Entrypoint (진입점)
 
 * **Type**: Python Function Call
-* **Entrypoint**: `src.agent_tool:commit_wiki_knowledge`
+* **Entrypoint**: `src.interfaces.agent_tool:commit_wiki_knowledge`
 * **Runtime**: `.venv/bin/python`
 
 ---
