@@ -62,10 +62,11 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
 #     "func": retrieve_wiki_knowledge
 # }
 
-def commit_wiki_knowledge(title: str, description: str, tags: List[str], content: str, topic_name: str = None, topic_update_text: str = None, image_paths: List[str] = None) -> str:
+def commit_wiki_knowledge(title: str, description: str, tags: List[str], content: str, topic_name: str = None, topic_update_text: str = None, image_paths: List[str] = None, resource_paths: List[str] = None, resource_summaries: List[Dict[str, Any]] = None) -> str:
     """
     새로운 지식을 qa/ 저널에 기록하고, 선택적으로 topics/ 문서를 누적 업데이트합니다.
-    대화 중 전달받은 이미지 파일(image_paths)이 존재할 경우, 글 번들 폴더 아래의 assets/ 폴더로 복사하고 마크다운 본문에 링크를 삽입합니다.
+    대화 중 전달받은 미디어/자원 파일이 존재할 경우, assets/ 폴더로 복사하고 마크다운 본문에 링크를 삽입하며,
+    resource_summaries가 있으면 통일된 Frontmatter를 가진 독립 요약 문서를 생성합니다.
     """
     import os
     import datetime
@@ -94,24 +95,83 @@ def commit_wiki_knowledge(title: str, description: str, tags: List[str], content
     os.makedirs(qa_bundle_dir, exist_ok=True)
     qa_file_path = os.path.join(qa_bundle_dir, f"{time_str}-{title_slug}.md")
     
-    # 2-1. 이미지 파일 복사 및 링크 생성
-    image_info = ""
+    # 2-1. 리소스 파일(이미지, 오디오, 문서 등) 복사 및 링크 생성
+    resource_info = ""
+    # 호환성을 위해 image_paths와 resource_paths 통합
+    all_resources = []
     if image_paths:
+        all_resources.extend(image_paths)
+    if resource_paths:
+        all_resources.extend(resource_paths)
+        
+    # resource_summaries의 file_path들 통합
+    summary_map = {}
+    if resource_summaries:
+        for summary in resource_summaries:
+            f_path = summary.get("file_path")
+            if f_path:
+                all_resources.append(f_path)
+                summary_map[f_path] = summary
+                
+    # 중복 제거
+    all_resources = list(dict.fromkeys(all_resources))
+    
+    if all_resources:
         assets_dir = os.path.join(qa_bundle_dir, "assets")
         os.makedirs(assets_dir, exist_ok=True)
         
-        image_links = []
-        for img_path in image_paths:
-            if os.path.exists(img_path):
-                filename = os.path.basename(img_path)
-                dest_path = os.path.join(assets_dir, filename)
-                shutil.copy(img_path, dest_path)
-                # 상대 경로 위키링크 생성
-                image_links.append(f"![[assets/{filename}]]")
+        copied_images = []
+        copied_files = []
+        image_extensions = (".png", ".jpg", ".jpeg", ".webp", ".gif")
         
-        if image_links:
-            content = content + "\n\n### 첨부 이미지\n" + "\n".join(image_links)
-            image_info = f" (이미지 {len(image_links)}장 assets 복사 완료)"
+        for res_path in all_resources:
+            if os.path.exists(res_path):
+                filename = os.path.basename(res_path)
+                dest_path = os.path.join(assets_dir, filename)
+                shutil.copy(res_path, dest_path)
+                
+                # 확장자에 맞춰 위키링크 생성
+                is_image = filename.lower().endswith(image_extensions)
+                if is_image:
+                    copied_images.append(f"![[assets/{filename}]]")
+                else:
+                    copied_files.append(f"[[assets/{filename}]]")
+                
+                # 매핑된 요약 정보(summary)가 있다면 사이드카 .md 파일 생성
+                if res_path in summary_map:
+                    summary = summary_map[res_path]
+                    s_type = summary.get("type", "DocumentSummary")
+                    s_title = summary.get("title", f"Summary: {filename}")
+                    s_desc = summary.get("description", "")
+                    s_tags = summary.get("tags", [])
+                    s_content = summary.get("content", "")
+                    
+                    s_tags_formatted = json.dumps(s_tags, ensure_ascii=False)
+                    
+                    sidecar_content = f"""---
+type: {s_type}
+source_path: "assets/{filename}"
+title: "{s_title}"
+description: "{s_desc}"
+tags: {s_tags_formatted}
+timestamp: "{now.isoformat()}"
+---
+
+{s_content}
+"""
+                    sidecar_file_path = os.path.join(assets_dir, f"{filename}.md")
+                    with open(sidecar_file_path, "w", encoding="utf-8") as sf:
+                        sf.write(sidecar_content)
+        
+        attachments_md = []
+        if copied_images:
+            attachments_md.append("### 첨부 이미지\n" + "\n".join(copied_images))
+        if copied_files:
+            attachments_md.append("### 첨부 파일 및 리소스\n" + "\n".join(copied_files))
+            
+        if attachments_md:
+            content = content + "\n\n" + "\n\n".join(attachments_md)
+            resource_info = f" (자원 {len(copied_images) + len(copied_files)}개 assets 복사 및 사이드카 {len(summary_map)}개 작성 완료)"
     
     # JSON 직렬화 시 한글 깨짐 방지
     tags_formatted = json.dumps(tags, ensure_ascii=False)
@@ -188,7 +248,7 @@ timestamp: "{now.isoformat()}"
     rel_qa_path = os.path.relpath(qa_file_path, root_dir)
     return (
         f"성공: 지식이 마크다운 파일로 영속화되었습니다.\n"
-        f"- Q&A 저널: {rel_qa_path}{topic_info}{image_info}\n\n"
+        f"- Q&A 저널: {rel_qa_path}{topic_info}{resource_info}\n\n"
         f"*주의: 사용자의 로컬 검토 완료 전입니다. AI 지식으로 최신화하려면 '인덱싱해줘'라고 요청하시거나 run_wiki_indexing 스킬을 호출해 주세요."
     )
 

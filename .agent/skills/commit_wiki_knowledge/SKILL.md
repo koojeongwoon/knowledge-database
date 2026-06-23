@@ -20,6 +20,15 @@ metadata:
 * `content` (string, Required): Q&A 저널 본문 내용 (마크다운 포맷 권장, 질답 텍스트 전체)
 * `topic_name` (string, Optional): 누적 업데이트하거나 신규 생성할 주제 이름 (예: 'postgresql')
 * `topic_update_text` (string, Optional): 주제 노트에 새로 덧붙여(Append) 합성할 본문 텍스트
+* `image_paths` (array of strings, Optional): 복사 및 링크할 첨부 이미지 경로 배열 (예: `["/path/to/img.png"]`)
+* `resource_paths` (array of strings, Optional): 복사 및 링크할 첨부 리소스 파일/오디오 경로 배열 (예: `["/path/to/voice.mp3", "/path/to/doc.pdf"]`)
+* `resource_summaries` (array of objects, Optional): 첨부 파일에 대한 정교한 요약 메타데이터 및 본문 배열. 각 객체는 다음 필드를 포함해야 합니다:
+  * `file_path` (string): 분석할 원본 파일의 로컬 경로
+  * `type` (string): 미디어 타입 (`ImageSummary` \| `AudioSummary` \| `DocumentSummary`)
+  * `title` (string): RAG 검색에 활용될 자원 요약용 명확한 제목
+  * `description` (string): 자원에 대한 1줄 설명
+  * `tags` (array of strings): 자원과 관련된 태그 목록
+  * `content` (string): 텍스트 변환된 풍부한 마크다운 본문 (예: 회의 타임라인, 파싱된 표, OCR 텍스트 등)
 
 ## 2. Entrypoint (진입점)
 
