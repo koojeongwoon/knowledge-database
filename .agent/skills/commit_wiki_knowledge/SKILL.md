@@ -33,7 +33,7 @@ metadata:
 ## 2. Entrypoint (진입점)
 
 * **Type**: Python Function Call
-* **Entrypoint**: `src.interfaces.agent_tool:commit_wiki_knowledge`
+* **Entrypoint**: `src.api.agent_tool:commit_wiki_knowledge`
 * **Runtime**: `.venv/bin/python`
 
 ---
@@ -50,6 +50,13 @@ metadata:
 모든 마크다운 상단에는 반드시 YAML Frontmatter가 들어가야 하며, 아래 양식을 유지합니다.
 * **QAJournal (Q&A용)**: `type: QAJournal`, `title`, `description`, `tags`, `timestamp` (UTC ISO 포맷), `source: agent-commit` 필수.
 * **TopicSummary (토픽용)**: `type: TopicSummary`, `title`, `description`, `tags`, `timestamp` (최종 갱신 시간) 필수.
+* **수동 연결 강도 제어 (`custom_relations`)**: 특정 위키링크([[WikiLink]]) 간의 연관 강도(가중치)를 수동 지정하고 싶을 때 Frontmatter에 아래와 같이 `custom_relations` 리스트를 추가할 수 있습니다.
+  ```yaml
+  custom_relations:
+    - link: "[[연결할토픽]]"
+      weight: 1.5  # 실수형 가중치 (기본값: 1.0, 권장 범위: 0.1 ~ 2.0)
+  ```
+  * 이 지정값은 RAG 그래프 확장 시 $\text{similarity} = \min(0.8500 \times \text{weight}, 0.9900)$ 공식으로 수렴하여 우선 노출 여부를 강제 결정합니다.
 
 ### 3) 강력한 위키링크(`[[WikiLink]]`) 연결 법칙
 * **기존 토픽 링크**: 본문에 지식베이스 내에 이미 존재하는 토픽 제목(예: `LLM-Wiki`, `PostgreSQL`, `pgvector`)이 언급되면, 반드시 `[[llm-wiki]]`, `[[postgresql]]` 형태로 감싸 위키링크를 엮습니다.

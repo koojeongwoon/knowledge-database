@@ -18,16 +18,6 @@ class ImageProcessor:
         else:
             print("[!] Warning: OPENAI_API_KEY not found. Image processing will run in Mock mode.")
 
-    def _get_image_hash(self, file_path: str) -> str:
-        """이미지 파일의 MD5 해시를 구합니다."""
-        hasher = hashlib.md5()
-        with open(file_path, "rb") as f:
-            buf = f.read(8192)
-            while len(buf) > 0:
-                hasher.update(buf)
-                buf = f.read(8192)
-        return hasher.hexdigest()
-
     def _encode_image_to_base64(self, file_path: str) -> str:
         """이미지 파일을 Base64 문자열로 인코딩합니다."""
         with open(file_path, "rb") as f:
@@ -79,33 +69,8 @@ class ImageProcessor:
         elif ext == ".gif":
             mime_type = "image/gif"
 
-        prompt = """너는 지식베이스 RAG 시스템을 위한 고도의 이미지 분석가이다.
-이 이미지를 다각도로 분석하여 사용자가 텍스트 기반 RAG 검색으로 이 이미지를 쉽게 찾아낼 수 있도록 정보를 추출해라.
-
-다음의 5가지 요소를 한국어로 상세히 추출해라:
-1. **Title**: 이 이미지의 핵심 특징을 5자 이내로 요약한 명확한 제목 (예: 'K8s 아키텍처 다이어그램', '모던 거실 인테리어')
-2. **Description**: 이미지 전체의 구도, 목적, 핵심 맥락을 요약한 한 줄 설명
-3. **Tags**: 이미지를 대표하는 키워드 태그 3~5개 (JSON list 형식으로 반환, 예: ["kubernetes", "architecture", "network"])
-4. **Visual Analysis (오브젝트 & 스타일)**:
-   - 이미지 내에 존재하는 주요 물리적/추상적 객체(오브젝트)들을 모두 나열하고 묘사해라. (인테리어 소품, 서버 노드, 아이콘 등)
-   - 색감(컬러 스키마), 조명 상태, 전체적인 시각적 디자인 스타일(예: 북유럽풍, 모던, 우드톤, 와이어프레임)을 묘사해라.
-5. **OCR (Text Extraction)**:
-   - 이미지 내에 글자가 존재한다면, 누락 없이 모든 영문/국문 텍스트를 추출해서 구조화하여 작성해라. 에러 로그나 소스코드가 캡처되어 있다면 코드 블록으로 표현해라.
-
-결과는 반드시 아래의 포맷으로만 답변해야 하며, 추가적인 인사말이나 마크다운 백틱(```) 등은 일체 포함하지 마라.
-
----
-title: "[1번 제목]"
-description: "[2번 요약 설명]"
-tags: [3번 태그들 (JSON list 포맷)]
----
-
-### 1. 시각 분석 (객체 및 스타일)
-[4번 내용]
-
-### 2. 텍스트 추출 (OCR)
-[5번 내용]
-"""
+        from src.media.domain.prompts import IMAGE_ANALYSIS_PROMPT
+        prompt = IMAGE_ANALYSIS_PROMPT
 
         try:
             response = self.client.chat.completions.create(
@@ -116,10 +81,10 @@ tags: [3번 태그들 (JSON list 포맷)]
                         "content": [
                             {"type": "text", "text": prompt},
                             {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{base64_image}"
-                                }
+                                 "type": "image_url",
+                                 "image_url": {
+                                     "url": f"data:{mime_type};base64,{base64_image}"
+                                 }
                             }
                         ]
                     }
@@ -135,8 +100,10 @@ tags: [3번 태그들 (JSON list 포맷)]
     def process_images(self) -> Dict[str, int]:
         """
         증분 이미지 처리 루프를 실행합니다.
-        - 변경된 이미지만 VLM API 호출 후 사이드카 마크다운 파일로 작성합니다.
+        - 비즈니스 정책(파일 해시, 마크다운 조립)은 Media 도메인 모델에 위임합니다.
         """
+        from src.media.domain.model import MediaFile, MediaSummary, SidecarDocument
+        
         stats = {"processed": 0, "skipped": 0, "errors": 0}
         
         # 1. 대상 디렉토리 스캔
@@ -149,7 +116,6 @@ tags: [3번 태그들 (JSON list 포맷)]
             for root, _, files in os.walk(target_path):
                 for file in files:
                     if file.lower().endswith(self.image_extensions):
-                        # 사이드카 마크다운 파일 자체는 수집 제외
                         image_files.append(os.path.join(root, file))
         
         if not image_files:
@@ -158,68 +124,67 @@ tags: [3번 태그들 (JSON list 포맷)]
         print(f"[*] Found {len(image_files)} image file(s) to scan...")
 
         for img_path in image_files:
-            rel_img_path = os.path.relpath(img_path, self.root_dir)
-            sidecar_path = img_path + ".md"
-            
             try:
-                # 2. 증분 검사 (MD5 Hash 비교)
-                current_hash = self._get_image_hash(img_path)
-                existing_hash = self._parse_sidecar_hash(sidecar_path)
+                # 2. 도메인 엔티티(MediaFile)로 변환
+                media_file = MediaFile(img_path, self.root_dir)
+                sidecar_doc = SidecarDocument(media_file, "ImageSummary")
                 
-                if current_hash == existing_hash and os.path.exists(sidecar_path):
+                # 증분 검사 (MD5 Hash 비교)
+                existing_hash = self._parse_sidecar_hash(sidecar_doc.sidecar_path)
+                
+                if not media_file.is_modified(existing_hash) and os.path.exists(sidecar_doc.sidecar_path):
                     stats["skipped"] += 1
                     continue
 
-                print(f"[+] Processing new/modified image: {rel_img_path}...")
+                print(f"[+] Processing new/modified image: {media_file.rel_path}...")
                 
-                # 3. Vision API 분석 실행
+                # 3. Vision API 분석 실행 (외부 VLM API 조율)
                 vlm_result = self._analyze_image_via_vlm(img_path)
                 
-                # 4. 사이드카 마크다운 파일 작성
-                import re
+                # 4. 분석 결과 요약 데이터 정제 및 파싱
+                import yaml
+                title = f"Image: {media_file.filename}"
+                description = "Auto generated summary"
+                tags = ["image"]
+                visual_analysis = vlm_result
+                ocr_text = ""
                 
-                # VLM 결과가 yaml 형식을 갖추고 있다면
                 if vlm_result.startswith("---"):
                     parts = vlm_result.split("---", 2)
                     if len(parts) >= 3:
-                        yaml_content = parts[1]
-                        body_content = parts[2]
+                        try:
+                            fm = yaml.safe_load(parts[1])
+                            title = fm.get("title", title)
+                            description = fm.get("description", description)
+                            tags = fm.get("tags", tags)
+                        except Exception:
+                            pass
+                        body_content = parts[2].strip()
                         
-                        # 중복 방지를 위해 기존 key 제거
-                        yaml_content = re.sub(r"content_hash:.*?\n", "", yaml_content)
-                        yaml_content = re.sub(r"image_path:.*?\n", "", yaml_content)
-                        yaml_content = re.sub(r"type:.*?\n", "", yaml_content)
-                        
-                        updated_yaml = (
-                            f"type: ImageSummary\n"
-                            f"image_path: \"{rel_img_path}\"\n"
-                            f"content_hash: \"{current_hash}\"\n"
-                            f"{yaml_content.strip()}\n"
-                        )
-                        final_content = f"---\n{updated_yaml}---\n{body_content}"
-                    else:
-                        final_content = vlm_result
-                else:
-                    # YAML 형식이 안 지켜진 경우 전체 바디로 처리
-                    final_content = (
-                        f"---\n"
-                        f"type: ImageSummary\n"
-                        f"image_path: \"{rel_img_path}\"\n"
-                        f"content_hash: \"{current_hash}\"\n"
-                        f"title: \"Image: {os.path.basename(img_path)}\"\n"
-                        f"description: \"Auto generated summary\"\n"
-                        f"tags: [\"image\"]\n"
-                        f"---\n\n"
-                        f"{vlm_result}"
-                    )
+                        body_parts = body_content.split("### 2. 텍스트 추출 (OCR)")
+                        visual_analysis = body_parts[0].replace("### 1. 시각 분석 (객체 및 스타일)", "").strip()
+                        if len(body_parts) > 1:
+                            ocr_text = body_parts[1].strip()
                 
-                with open(sidecar_path, "w", encoding="utf-8") as f:
+                # 5. 도메인 값 객체(MediaSummary)로 데이터 캡슐화
+                summary = MediaSummary(
+                    title=title,
+                    description=description,
+                    tags=tags,
+                    visual_analysis=visual_analysis,
+                    ocr_text=ocr_text
+                )
+                
+                # 6. 사이드카 마크다운 본문 작성을 도메인에 위임 후 저장
+                final_content = sidecar_doc.build_markdown_content(summary)
+                
+                with open(sidecar_doc.sidecar_path, "w", encoding="utf-8") as f:
                     f.write(final_content)
                 
                 stats["processed"] += 1
                 
             except Exception as e:
-                print(f"[✗] Failed to process image {rel_img_path}: {e}")
+                print(f"[✗] Failed to process image {os.path.basename(img_path)}: {e}")
                 stats["errors"] += 1
                 
         # 5. 원본이 삭제된 고아 사이드카 마크다운 파일 청소

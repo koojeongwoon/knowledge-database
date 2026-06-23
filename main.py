@@ -1,8 +1,8 @@
 import argparse
 import sys
-from src.infrastructure.database import DatabaseManager
-from src.domain.indexing.service import WikiIndexer
-from src.domain.retrieval.service import WikiSearcher
+from src.core.database.factory import DatabaseManager
+from src.indexing.application.service import WikiIndexer
+from src.retrieval.application.service import WikiSearcher
 from src.core.config import EMBEDDING_DIM, EMBEDDING_PROVIDER, WIKI_DIR
 
 def get_embedding_service():
@@ -10,14 +10,14 @@ def get_embedding_service():
     설정된 EMBEDDING_PROVIDER에 따라 알맞은 임베딩 서비스 구현체를 리턴합니다.
     """
     if EMBEDDING_PROVIDER == "openai":
-        from src.domain.indexing.embedding import OpenAIEmbeddingService
+        from src.indexing.domain.embedding import OpenAIEmbeddingService
         return OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
     elif EMBEDDING_PROVIDER == "bge-m3":
-        from src.domain.indexing.embedding import BGEM3EmbeddingService
+        from src.indexing.domain.embedding import BGEM3EmbeddingService
         return BGEM3EmbeddingService()
     else:
         # 기본값 및 fake 공급자
-        from src.domain.indexing.embedding import FakeEmbeddingService
+        from src.indexing.domain.embedding import FakeEmbeddingService
         return FakeEmbeddingService(dimension=EMBEDDING_DIM)
 
 def cmd_index(args):

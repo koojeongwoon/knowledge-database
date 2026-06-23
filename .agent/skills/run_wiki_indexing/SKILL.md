@@ -19,11 +19,11 @@ metadata:
 ## 2. Entrypoint (진입점)
 
 * **Type**: Python Function Call
-* **Entrypoint**: `src.interfaces.agent_tool:run_wiki_indexing`
+* **Entrypoint**: `src.api.agent_tool:run_wiki_indexing`
 * **Runtime**: `.venv/bin/python`
 
 ## 3. Reference CLI (테스트 명령어)
 
 ```bash
-.venv/bin/python -c "from src.interfaces.agent_tool import run_wiki_indexing; print(run_wiki_indexing())"
+.venv/bin/python -c "from src.api.agent_tool import run_wiki_indexing; print(run_wiki_indexing())"
 ```

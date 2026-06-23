@@ -1,6 +1,6 @@
 from src.core.config import DB_TYPE
-from src.infrastructure.postgres_db import PostgresDatabaseManager
-from src.infrastructure.sqlite_db import SqliteDatabaseManager
+from src.core.database.postgres import PostgresDatabaseManager
+from src.core.database.sqlite import SqliteDatabaseManager
 
 def DatabaseManager():
     """

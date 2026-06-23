@@ -2,14 +2,19 @@ import re
 import math
 from typing import List, Dict, Any
 from collections import defaultdict
-from src.infrastructure.database import DatabaseManager
-from src.domain.indexing.embedding import BaseEmbeddingService
+from src.core.database.factory import DatabaseManager
+from src.indexing.domain.embedding import BaseEmbeddingService
 from src.core.config import SIMILARITY_THRESHOLD, RERANKER_ENABLED, RERANKER_MODEL, RRF_K
 
+
+from src.retrieval.domain.model import Query, RankFusion
+
+from src.retrieval.infrastructure.repository import RetrievalRepository
 
 class WikiSearcher:
     def __init__(self, db_manager: DatabaseManager, embedding_service: BaseEmbeddingService):
         self.db_manager = db_manager
+        self.repository = RetrievalRepository(db_manager)
         self.embedding_service = embedding_service
         self.reranker = None
 
@@ -25,56 +30,6 @@ class WikiSearcher:
             print("Reranker loaded successfully.")
         except Exception as e:
             print(f"Warning: Failed to load reranker model: {e}. Reranking disabled.")
-
-    @staticmethod
-    def _rrf_fusion(
-        vector_results: List[Dict[str, Any]],
-        keyword_results: List[Dict[str, Any]],
-        k: int = 60,
-    ) -> List[Dict[str, Any]]:
-        """
-        Reciprocal Rank Fusion으로 벡터 검색과 키워드 검색 두 랭킹 리스트를 결합합니다.
-        score(doc) = Σ 1/(k + rank_i)
-        결과 점수는 0~1 범위로 정규화됩니다.
-        """
-        scores: Dict[tuple, float] = defaultdict(float)
-        doc_map: Dict[tuple, Dict] = {}
-        source_map: Dict[tuple, List[str]] = defaultdict(list)
-
-        for rank, doc in enumerate(vector_results):
-            key = (doc["file_path"], doc.get("chunk_index", 0))
-            scores[key] += 1.0 / (k + rank + 1)
-            doc_map[key] = doc
-            source_map[key].append("vector")
-
-        for rank, doc in enumerate(keyword_results):
-            key = (doc["file_path"], doc.get("chunk_index", 0))
-            scores[key] += 1.0 / (k + rank + 1)
-            if key not in doc_map:
-                doc_map[key] = doc
-            source_map[key].append("keyword")
-
-        if not scores:
-            return []
-
-        # 0~1 범위로 정규화
-        max_score = max(scores.values())
-        if max_score > 0:
-            normalized = {k: v / max_score for k, v in scores.items()}
-        else:
-            normalized = scores
-
-        # 점수 내림차순 정렬
-        sorted_keys = sorted(normalized.keys(), key=lambda k: normalized[k], reverse=True)
-
-        results = []
-        for key in sorted_keys:
-            doc = doc_map[key].copy()
-            doc["rrf_score"] = normalized[key]
-            doc["search_sources"] = source_map[key]
-            results.append(doc)
-
-        return results
 
     def _rerank(self, query: str, docs: List[Dict[str, Any]], top_k: int = 10) -> List[Dict[str, Any]]:
         """
@@ -103,24 +58,29 @@ class WikiSearcher:
         4) 임계치 미만 결과 제거
         5) 위키링크 그래프 확장
         """
-        # 1. 쿼리 임베딩 생성
-        query_embedding = self.embedding_service.embed_text(query)
+        # 1. 쿼리 객체 캡슐화 및 임베딩 생성
+        query_obj = Query(query)
+        query_embedding = self.embedding_service.embed_text(query_obj.text)
 
         # 2. 이중 경로 검색 — 최종 limit보다 넓은 후보 풀 확보
         candidate_limit = max(limit * 4, 20)
-        vector_results = self.db_manager.similarity_search(query_embedding, limit=candidate_limit)
-        keyword_results = self.db_manager.keyword_search(query, limit=candidate_limit)
+        vector_results = self.repository.similarity_search(query_embedding, limit=candidate_limit)
+        
+        # 도메인 정책에 따른 정제된 키워드 사용
+        clean_keywords = query_obj.get_clean_keywords()
+        search_query_text = " ".join(clean_keywords) if clean_keywords else query_obj.text
+        keyword_results = self.repository.keyword_search(search_query_text, limit=candidate_limit)
 
         if not vector_results and not keyword_results:
             return []
 
-        # 3. RRF 결합
-        fused = self._rrf_fusion(vector_results, keyword_results, k=RRF_K)
+        # 3. RRF 결합 (도메인 모델 서비스 호출)
+        fused = RankFusion.rrf_fusion(vector_results, keyword_results, k=RRF_K)
 
         # 4. (선택) 리랭커 재정렬 — RRF 상위 후보만 리랭크
         if self.reranker:
             rerank_pool_size = max(limit * 3, 15)
-            fused = self._rerank(query, fused[:rerank_pool_size], top_k=limit * 2)
+            fused = self._rerank(query_obj.text, fused[:rerank_pool_size], top_k=limit * 2)
             score_key = "reranker_score"
         else:
             score_key = "rrf_score"
@@ -170,7 +130,7 @@ class WikiSearcher:
 
         # 7. Graph-link RAG: 매칭된 문서들과 위키링크로 1촌 연결된 연관 개념 확장
         try:
-            connected_docs = self.db_manager.get_connected_documents(file_paths, limit=3)
+            connected_docs = self.repository.get_connected_documents(file_paths, limit=3)
             for doc in connected_docs:
                 # 중복 반환 방지
                 if any(r["file_path"] == doc["file_path"] for r in retrieved_docs):

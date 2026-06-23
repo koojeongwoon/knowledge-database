@@ -20,11 +20,11 @@ metadata:
 ## 2. Entrypoint (진입점)
 
 * **Type**: Python Function Call
-* **Entrypoint**: `src.interfaces.agent_tool:retrieve_wiki_knowledge`
+* **Entrypoint**: `src.api.agent_tool:retrieve_wiki_knowledge`
 * **Runtime**: `.venv/bin/python`
 
 ## 3. Reference CLI (테스트 명령어)
 
 ```bash
-.venv/bin/python -c "from src.interfaces.agent_tool import retrieve_wiki_knowledge; print(retrieve_wiki_knowledge('Graph RAG', limit=1))"
+.venv/bin/python -c "from src.api.agent_tool import retrieve_wiki_knowledge; print(retrieve_wiki_knowledge('Graph RAG', limit=1))"
 ```

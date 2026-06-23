@@ -94,15 +94,29 @@ sequenceDiagram
 
 ---
 
-## 4. 코드 설계 및 주요 모듈 구성
+## 4. 코드 설계 및 주요 모듈 구성 (Bounded Context 수직 슬라이싱)
 
-### 1) 백엔드 핵심 코드 파일 정보
+### 1) 백엔드 핵심 코드 파일 및 패키지 구조
 * [pyproject.toml](file:///Users/jw/__dev/knowledge/pyproject.toml): `hatchling` 및 `uv` 표준을 따르는 의존성 설정 파일.
-* [src/image_processor.py](file:///Users/jw/__dev/knowledge/src/image_processor.py): 신규 이미지 스캔, MD5 증분 검사, VLM API 요청, 고아 캐시 파일 자동 삭제 담당.
-* [src/indexer.py](file:///Users/jw/__dev/knowledge/src/indexer.py): 로컬 `.md` 스캔 및 DB 저장 비교(증분), 위키링크 그래프 관계 적재, 문맥 보존용 이중 청킹 및 배치 임베딩.
-* [src/database.py](file:///Users/jw/__dev/knowledge/src/database.py): pgvector 연결 설정, 테이블/인덱스(HNSW, FTS GIN) 생성 및 SQL 유사도 쿼리 실행.
-* [src/searcher.py](file:///Users/jw/__dev/knowledge/src/searcher.py): RRF 순위 합산 알고리즘 및 Cross-Encoder 리랭킹, Graph Extension 매핑 및 Parent-Child 복원 필터.
-* [src/agent_tool.py](file:///Users/jw/__dev/knowledge/src/agent_tool.py): 에이전트 전용 호출 툴 정의 ([retrieve_wiki_knowledge](file:///Users/jw/__dev/knowledge/src/agent_tool.py#L8), [commit_wiki_knowledge](file:///Users/jw/__dev/knowledge/src/agent_tool.py#L59)).
+* **Shared Kernel & Infrastructure**:
+  * [src/infrastructure/database.py](file:///Users/jw/__dev/knowledge/src/infrastructure/database.py): DB 타입(Postgres/Sqlite)별 드라이버 팩토리.
+  * [src/infrastructure/postgres_db.py](file:///Users/jw/__dev/knowledge/src/infrastructure/postgres_db.py): PostgreSQL 커넥션 생명주기 관리.
+  * [src/infrastructure/sqlite_db.py](file:///Users/jw/__dev/knowledge/src/infrastructure/sqlite_db.py): SQLite 커넥션 생명주기 관리.
+* **Wiki Bounded Context**:
+  * [src/wiki/domain/parser.py](file:///Users/jw/__dev/knowledge/src/wiki/domain/parser.py): 마크다운 구조 분석, YAML Frontmatter 추출 및 위키링크 파싱.
+* **Indexing Bounded Context**:
+  * [src/indexing/domain/model.py](file:///Users/jw/__dev/knowledge/src/indexing/domain/model.py): Chunk(VO), Edge(Entity: 4대 신호 가중치 계산) 도메인 모델.
+  * [src/indexing/application/service.py](file:///Users/jw/__dev/knowledge/src/indexing/application/service.py): 로컬-DB 비교 증분 인덱싱 파이프라인 제어 (병렬 처리 지원).
+  * [src/indexing/infrastructure/repository.py](file:///Users/jw/__dev/knowledge/src/indexing/infrastructure/repository.py): DB 초기화, 데이터 적재/삭제 등 영속화 처리.
+* **Retrieval Bounded Context**:
+  * [src/retrieval/domain/model.py](file:///Users/jw/__dev/knowledge/src/retrieval/domain/model.py): Query(VO), RankFusion(Domain Service) 도메인 규칙 정의.
+  * [src/retrieval/application/service.py](file:///Users/jw/__dev/knowledge/src/retrieval/application/service.py): 하이브리드 검색, RRF 결합, 리랭커 및 그래프 연관 확장 오케스트레이션.
+  * [src/retrieval/infrastructure/repository.py](file:///Users/jw/__dev/knowledge/src/retrieval/infrastructure/repository.py): pgvector 벡터 및 FTS 키워드 DB 검색 쿼리 실행.
+* **Media Bounded Context**:
+  * [src/media/domain/model.py](file:///Users/jw/__dev/knowledge/src/media/domain/model.py): MediaFile, SidecarDocument 도메인 개체 정의.
+  * [src/media/application/processor.py](file:///Users/jw/__dev/knowledge/src/media/application/processor.py): VLM 요약 추출 및 이미지 캐시 관리.
+* **Interfaces**:
+  * [src/interfaces/agent_tool.py](file:///Users/jw/__dev/knowledge/src/interfaces/agent_tool.py): AI 에이전트 연동용 스킬 API 엔트리포인트 ([retrieve_wiki_knowledge](file:///Users/jw/__dev/knowledge/src/interfaces/agent_tool.py#L8), [commit_wiki_knowledge](file:///Users/jw/__dev/knowledge/src/interfaces/agent_tool.py#L65), [run_wiki_indexing](file:///Users/jw/__dev/knowledge/src/interfaces/agent_tool.py#L255)).
 
 ---
 
