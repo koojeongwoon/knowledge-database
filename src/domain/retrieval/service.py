@@ -176,6 +176,11 @@ class WikiSearcher:
                 if any(r["file_path"] == doc["file_path"] for r in retrieved_docs):
                     continue
 
+                # 4대 신호 및 수동 지정 연결 강도(edge_weight)를 유사도에 동적 반영
+                # 기본 기준값인 0.85에 edge_weight 가중치를 곱해 정합성 있게 계산
+                edge_weight = doc.get("edge_weight", 1.0)
+                dynamic_similarity = min(0.8500 * edge_weight, 0.9900)
+
                 retrieved_docs.append({
                     "file_path": doc["file_path"],
                     "doc_type": f"{doc['doc_type']} (Graph Extension)",
@@ -183,8 +188,7 @@ class WikiSearcher:
                     "description": doc.get("description", ""),
                     "tags": doc.get("tags", []),
                     "content": doc.get("parent_content", doc["content"]),
-                    # 그래프 연동으로 찾아온 문서는 고정 가중치 부여
-                    "similarity": 0.8500,
+                    "similarity": dynamic_similarity,
                 })
         except Exception as ex:
             print(f"Warning: Failed to expand graph context: {ex}")

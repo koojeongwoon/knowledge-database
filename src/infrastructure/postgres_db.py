@@ -71,11 +71,15 @@ class PostgresDatabaseManager(BaseDatabaseManager):
                 id SERIAL PRIMARY KEY,
                 source_path VARCHAR(512) NOT NULL,
                 target_topic VARCHAR(256) NOT NULL,
+                weight REAL NOT NULL DEFAULT 1.0,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT uq_edge UNIQUE (source_path, target_topic)
             );
             """
             cur.execute(create_edges_query)
+            
+            # 기존 테이블 대응을 위해 weight 컬럼 추가
+            cur.execute("ALTER TABLE knowledge_edges ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 1.0;")
             
             # HNSW 인덱스는 pgvector 0.5.0 이상에서 지원.
             try:
@@ -283,18 +287,18 @@ class PostgresDatabaseManager(BaseDatabaseManager):
                 print(f"Warning: Keyword search failed ({e}). Falling back to empty results.")
                 return []
 
-    def insert_edge(self, source_path: str, target_topic: str):
+    def insert_edge(self, source_path: str, target_topic: str, weight: float = 1.0):
         """
-        문서 간의 위키링크 방향성 연결(Edge)을 데이터베이스에 저장합니다.
+        문서 간의 위키링크 방향성 연결(Edge) 및 가중치(weight)를 데이터베이스에 저장합니다.
         """
         self.connect()
         with self.conn.cursor() as cur:
             query = """
-            INSERT INTO knowledge_edges (source_path, target_topic)
-            VALUES (%s, %s)
-            ON CONFLICT (source_path, target_topic) DO NOTHING;
+            INSERT INTO knowledge_edges (source_path, target_topic, weight)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (source_path, target_topic) DO UPDATE SET weight = EXCLUDED.weight;
             """
-            cur.execute(query, (source_path, target_topic))
+            cur.execute(query, (source_path, target_topic, weight))
 
     def delete_document(self, file_path: str):
         """
@@ -334,29 +338,35 @@ class PostgresDatabaseManager(BaseDatabaseManager):
 
     def get_connected_documents(self, file_paths: List[str], limit: int = 3) -> List[Dict[str, Any]]:
         """
-        주어진 파일들과 연결된 타겟 토픽들의 대표 문서(chunk_index = 0) 본문을 조회합니다.
+        주어진 파일들과 연결된 타겟 토픽들의 대표 문서(chunk_index = 0) 본문을 조회하며,
+        연결 가중치(weight)를 함께 반환합니다.
         """
         if not file_paths:
             return []
             
+        import os
         self.connect()
         with self.conn.cursor() as cur:
-            # 1. 엣지 조회를 통해 1촌 연결된 토픽들 리스트업
+            # 1. 엣지 조회를 통해 1촌 연결된 토픽들 및 가중치 리스트업
             query_edges = """
-            SELECT DISTINCT target_topic 
+            SELECT target_topic, MAX(weight) as weight
             FROM knowledge_edges 
             WHERE source_path = ANY(%s)
+            GROUP BY target_topic
+            ORDER BY weight DESC
             LIMIT %s;
             """
             cur.execute(query_edges, (file_paths, limit))
-            topics = [row[0] for row in cur.fetchall()]
+            edges_rows = cur.fetchall()
             
-            if not topics:
+            if not edges_rows:
                 return []
                 
+            # 토픽명 -> 가중치 매핑 딕셔너리 생성
+            topic_to_weight = {row[0].lower(): row[1] for row in edges_rows}
+            topics_lower = list(topic_to_weight.keys())
+                
             # 2. 토픽명과 매칭되는 문서들의 대표 청크(index=0) 내용 가져오기
-            # topics의 토픽명이 소문자 케밥케이스로 추출될 것이므로,
-            # DB 파일 경로 내의 파일명(예: topics/paseto.md 의 paseto)과 매칭
             query_docs = """
             SELECT file_path, doc_type, title, description, tags, content, parent_content
             FROM knowledge_documents
@@ -365,12 +375,22 @@ class PostgresDatabaseManager(BaseDatabaseManager):
                 SPLIT_PART(SPLIT_PART(file_path, '/', 2), '.', 1) = ANY(%s)
             );
             """
-            # 소문자로 변환해서 비교 수행
-            topics_lower = [t.lower() for t in topics]
             cur.execute(query_docs, (topics_lower, topics_lower))
             
             columns = [col[0] for col in cur.description]
             results = []
             for row in cur.fetchall():
-                results.append(dict(zip(columns, row)))
+                doc = dict(zip(columns, row))
+                t_title = doc["title"].lower()
+                t_filename = os.path.splitext(os.path.basename(doc["file_path"]))[0].lower()
+                
+                # 가중치 매핑 매칭
+                weight = 1.0
+                if t_title in topic_to_weight:
+                    weight = topic_to_weight[t_title]
+                elif t_filename in topic_to_weight:
+                    weight = topic_to_weight[t_filename]
+                    
+                doc["edge_weight"] = weight
+                results.append(doc)
             return results

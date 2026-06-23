@@ -72,10 +72,45 @@ class WikiIndexer:
         # 중복 등록 방지 및 데이터 무결성을 위해 기존 저장된 문서 청크와 엣지 삭제
         db_manager.delete_document(rel_path)
 
-        # 본문 내 [[WikiLink]] 추출하여 엣지(관계) 저장
+        # 본문 내 [[WikiLink]] 추출하여 엣지(관계) 및 연결 강도(weight) 저장
         wiki_links = extract_wiki_links(parsed_data["body"])
+        
+        current_source_path = fm.get("source_path")
+        current_doc_type = doc_type
+        custom_relations = fm.get("custom_relations", [])
+        
         for target_topic in wiki_links:
-            db_manager.insert_edge(rel_path, target_topic)
+            # 4대 신호 기반 관련도 산정 (기본 직접 링크 3.0)
+            signals = [3.0]
+            
+            t_key = target_topic.lower()
+            target_meta = getattr(self, "topic_metadata", {}).get(t_key)
+            if target_meta:
+                # 자료 중복 (Source overlap)
+                t_source_path = target_meta.get("source_path")
+                if current_source_path and t_source_path and current_source_path == t_source_path:
+                    signals.append(4.0)
+                
+                # 타입 친화도 (Type affinity)
+                t_type = target_meta.get("type")
+                if current_doc_type and t_type and current_doc_type == t_type:
+                    signals.append(1.0)
+            
+            weight = max(signals)
+            
+            # 사용자/에이전트 지정 연결 강도 오버라이드
+            import re
+            for relation in custom_relations:
+                link_str = relation.get("link", "")
+                link_topic = re.sub(r'[\[\]]', '', link_str).split('/')[-1].split('.')[0].strip().lower()
+                if link_topic == t_key:
+                    try:
+                        weight = float(relation.get("weight", 1.0))
+                    except Exception:
+                        pass
+                    break
+            
+            db_manager.insert_edge(rel_path, target_topic, weight)
 
         # 청크 수집 (임베딩 전 단계)
         parent_chunks = split_markdown_by_headers(parsed_data["body"])
@@ -145,6 +180,27 @@ class WikiIndexer:
         
         # 2. 로컬 파일 목록 및 DB의 파일 해시 맵 획득
         local_files = self._get_local_files()
+        
+        # 2-1. 로컬 메타데이터 캐시 구축 (가중치 계산용)
+        self.topic_metadata = {}
+        for f in local_files:
+            f_full = os.path.join(self.root_dir, f)
+            try:
+                parsed_data = parse_markdown_file(f_full)
+                fm = parsed_data.get("frontmatter", {})
+                title = fm.get("title", "")
+                s_path = fm.get("source_path")
+                t_type = fm.get("type")
+                
+                t_slug = os.path.splitext(os.path.basename(f))[0].lower()
+                metadata = {"source_path": s_path, "type": t_type}
+                
+                self.topic_metadata[t_slug] = metadata
+                if title:
+                    self.topic_metadata[title.lower()] = metadata
+            except Exception:
+                pass
+                
         db_hashes = self.db_manager.get_all_file_hashes()
         
         stats = {
