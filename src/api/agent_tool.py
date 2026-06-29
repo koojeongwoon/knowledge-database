@@ -2,8 +2,74 @@ from typing import List, Dict, Any
 import json
 from src.core.database.factory import DatabaseManager
 from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
-from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
+from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR, DB_TYPE
 from src.retrieval.application.service import WikiSearcher
+
+def increment_citation_count(file_paths: List[str], db_manager: DatabaseManager):
+    """
+    RAG 검색 결과로 인용된 문서들의 인용 횟수를 1 증가시킵니다.
+    데이터베이스(knowledge_citations)와 로컬 JSON 파일(.agents/citations.json)에 기록을 동기화합니다.
+    """
+    import os
+    import datetime
+    
+    if not file_paths:
+        return
+        
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    conn = db_manager.conn
+    
+    # SQLite와 Postgres를 구분하여 커서 생성 및 실행
+    cur = conn.cursor()
+    try:
+        for path in file_paths:
+            if DB_TYPE == "sqlite":
+                cur.execute("""
+                    INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
+                    VALUES (?, 1, ?)
+                    ON CONFLICT (file_path) DO UPDATE SET
+                        citation_count = knowledge_citations.citation_count + 1,
+                        last_cited_at = excluded.last_cited_at;
+                """, (path, now))
+            else:
+                cur.execute("""
+                    INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
+                    VALUES (%s, 1, %s)
+                    ON CONFLICT (file_path) DO UPDATE SET
+                        citation_count = knowledge_citations.citation_count + 1,
+                        last_cited_at = EXCLUDED.last_cited_at;
+                """, (path, now))
+        conn.commit()
+    except Exception as e:
+        if DB_TYPE != "sqlite":
+            conn.rollback()
+        print(f"Warning: Failed to update DB citations: {e}")
+    finally:
+        cur.close()
+            
+    # 2. 로컬 citations.json 백업/동기화
+    citations_file = os.path.join(WIKI_DIR, ".agents", "citations.json")
+    citations_data = {}
+    os.makedirs(os.path.dirname(citations_file), exist_ok=True)
+    if os.path.exists(citations_file):
+        try:
+            with open(citations_file, 'r', encoding='utf-8') as f:
+                citations_data = json.load(f)
+        except Exception:
+            pass
+            
+    for path in file_paths:
+        if path not in citations_data:
+            citations_data[path] = {"citation_count": 0, "last_cited_at": now}
+        citations_data[path]["citation_count"] += 1
+        citations_data[path]["last_cited_at"] = now
+        
+    try:
+        with open(citations_file, 'w', encoding='utf-8') as f:
+            json.dump(citations_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Warning: Failed to write citations.json: {e}")
+
 
 def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
     """
@@ -27,6 +93,10 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
         if not results:
             return "지식베이스에서 관련된 문서를 찾지 못했습니다."
             
+        # 인용된 파일 경로 수집 및 카운트 누적
+        file_paths = [doc["file_path"] for doc in results]
+        increment_citation_count(file_paths, db_manager)
+            
         formatted_docs = []
         for doc in results:
             # Frontmatter에서 image_path 정보 추출 (이미지 RAG 연동용)
@@ -42,6 +112,7 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
                 f"Type: {doc['doc_type']}\n"
                 f"{image_path_str}"
                 f"Similarity Score: {doc['similarity']:.4f}\n"
+                f"Citation Count: {doc.get('citation_count', 0) + 1}\n"
                 f"Tags: {', '.join(doc['tags']) if doc['tags'] else 'None'}\n"
                 f"Content:\n{doc['content']}\n"
                 f"</document>"
@@ -199,7 +270,36 @@ source: "agent-commit"
     topic_info = ""
     if topic_name:
         topic_slug = slugify(topic_name)
-        topic_file_path = os.path.join(root_dir, "topics", f"{topic_slug}.md")
+        topic_file_path = None
+        
+        # 3-1. topic_map.json 조회하여 기존 카테고리 경로가 있는지 확인
+        topic_map_path = os.path.join(root_dir, ".agents", "topic_map.json")
+        if os.path.exists(topic_map_path):
+            try:
+                with open(topic_map_path, 'r', encoding='utf-8') as f:
+                    topic_map = json.load(f)
+                for cat, files in topic_map.items():
+                    for f_rel in files:
+                        if os.path.basename(f_rel) == f"{topic_slug}.md":
+                            topic_file_path = os.path.join(root_dir, f_rel)
+                            break
+                    if topic_file_path:
+                        break
+            except Exception:
+                pass
+                
+        # 3-2. 찾지 못했다면 물리적 재귀 탐색을 통해 기존 파일 위치 추적
+        if not topic_file_path or not os.path.exists(topic_file_path):
+            topics_search_dir = os.path.join(root_dir, "topics")
+            for root, _, files in os.walk(topics_search_dir):
+                if f"{topic_slug}.md" in files:
+                    topic_file_path = os.path.join(root, f"{topic_slug}.md")
+                    break
+                    
+        # 3-3. 둘 다 없으면 신규 생성용 루트 기본값 설정
+        if not topic_file_path:
+            topic_file_path = os.path.join(root_dir, "topics", f"{topic_slug}.md")
+            
         os.makedirs(os.path.dirname(topic_file_path), exist_ok=True)
         
         # 파일이 존재하면 누적 업데이트
@@ -279,13 +379,51 @@ def run_wiki_indexing() -> str:
     except Exception as e:
         return f"데이터베이스 인덱싱 수행 중 에러 발생: {e}"
 
-# langchain_tool_spec_commit = {
-#     "name": "commit_wiki_knowledge",
-#     "description": "새로운 지식을 qa/ 저널 및 topics/ 문서에 마크다운 파일로 기록합니다.",
-#     "func": commit_wiki_knowledge
-# }
-# langchain_tool_spec_indexing = {
-#     "name": "run_wiki_indexing",
-#     "description": "로컬 마크다운 지식들을 데이터베이스에 실시간으로 증분 인덱싱하여 AI가 참조할 수 있게 만듭니다.",
-#     "func": run_wiki_indexing
-# }
+def check_knowledge_drift() -> str:
+    """
+    스케줄 관리 디렉토리(.agents/schedules/)를 분석하여 갱신 주기가 도달한 노트들의 목록을 리턴합니다.
+    """
+    from src.indexing.application.refresher_service import KnowledgeRefresher
+    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
+    try:
+        targets = refresher.get_expired_targets()
+        if not targets:
+            return "CHECK_RESULT: NO_EXPIRED_TARGETS"
+        return json.dumps(targets, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error scanning expired schedules: {e}"
+
+def evaluate_knowledge_drift(file_path: str, latest_text: str) -> str:
+    """
+    특정 노트의 로컬 텍스트와 새로 수집된 최신 정보를 LLM을 통해 비교하여 갱신 괴리가 있는지 판독합니다.
+    """
+    from src.indexing.application.refresher_service import KnowledgeRefresher
+    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
+    try:
+        res = refresher.evaluate_drift(rel_path=file_path, latest_text=latest_text)
+        return json.dumps(res, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error evaluating knowledge drift: {e}"
+
+def apply_knowledge_merge(file_path: str) -> str:
+    """
+    사용자의 승인을 얻은 경우, scratch/에 생성된 임시 갱신안을 원본 지식 마크다운에 병합합니다.
+    """
+    from src.indexing.application.refresher_service import KnowledgeRefresher
+    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
+    try:
+        return refresher.apply_merge(rel_path=file_path)
+    except Exception as e:
+        return f"Error merging knowledge drift: {e}"
+
+def update_knowledge_schedule(file_path: str, interval: str, source: str, category: str = "programming") -> str:
+    """
+    대화를 통해 특정 마크다운 노트의 갱신 주기(refresh_interval) 및 수집 소스(refresh_source)를 변경합니다.
+    """
+    from src.indexing.application.refresher_service import KnowledgeRefresher
+    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
+    try:
+        refresher.update_or_create_schedule(rel_path=file_path, interval=interval, source=source, category=category)
+        return f"성공: {file_path} 노정의 갱신 주기를 {interval}(소출처: {source}, 범주: {category})으로 변경 완료했습니다."
+    except Exception as e:
+        return f"Error updating knowledge schedule: {e}"

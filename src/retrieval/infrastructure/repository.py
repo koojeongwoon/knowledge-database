@@ -48,14 +48,16 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         with conn.cursor() as cur:
             try:
                 sql = """
-                SELECT file_path, chunk_index, doc_type, title, description, tags,
-                       content, parent_content, raw_frontmatter,
+                SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
+                       d.content, d.parent_content, d.raw_frontmatter,
+                       COALESCE(c.citation_count, 0) AS citation_count,
                        ts_rank(
-                           to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, '')),
+                           to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')),
                            to_tsquery('simple', %s)
                        ) AS rank
-                FROM knowledge_documents
-                WHERE to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, ''))
+                FROM knowledge_documents d
+                LEFT JOIN knowledge_citations c ON d.file_path = c.file_path
+                WHERE to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, ''))
                       @@ to_tsquery('simple', %s)
                 ORDER BY rank DESC
                 LIMIT %s;
@@ -81,10 +83,12 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         with conn.cursor() as cur:
             query = """
             SELECT 
-                file_path, chunk_index, doc_type, title, description, tags, content, parent_content, raw_frontmatter,
-                (1 - (embedding <=> %s)) AS similarity
-            FROM knowledge_documents
-            ORDER BY embedding <=> %s ASC
+                d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags, d.content, d.parent_content, d.raw_frontmatter,
+                (1 - (d.embedding <=> %s)) AS similarity,
+                COALESCE(c.citation_count, 0) AS citation_count
+            FROM knowledge_documents d
+            LEFT JOIN knowledge_citations c ON d.file_path = c.file_path
+            ORDER BY d.embedding <=> %s ASC
             LIMIT %s;
             """
             cur.execute(query, (embedding_str, embedding_str, limit))
@@ -170,10 +174,12 @@ class SqliteRetrievalRepository(BaseRetrievalRepository):
             cursor.execute("""
             SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
                    d.content, d.parent_content, d.raw_frontmatter,
+                   COALESCE(c.citation_count, 0) AS citation_count,
                    (-knowledge_documents_fts.rank) AS rank
             FROM knowledge_documents d
             JOIN knowledge_documents_fts 
               ON d.file_path = knowledge_documents_fts.file_path AND d.chunk_index = knowledge_documents_fts.chunk_index
+            LEFT JOIN knowledge_citations c ON d.file_path = c.file_path
             WHERE knowledge_documents_fts MATCH ?
             ORDER BY rank DESC
             LIMIT ?;
@@ -195,8 +201,10 @@ class SqliteRetrievalRepository(BaseRetrievalRepository):
         conn = self.db_manager.conn
         cursor = conn.cursor()
         cursor.execute("""
-        SELECT file_path, chunk_index, doc_type, title, description, tags, content, parent_content, raw_frontmatter, embedding 
-        FROM knowledge_documents;
+        SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags, d.content, d.parent_content, d.raw_frontmatter, d.embedding,
+               COALESCE(c.citation_count, 0) AS citation_count
+        FROM knowledge_documents d
+        LEFT JOIN knowledge_citations c ON d.file_path = c.file_path;
         """)
         
         candidates = []

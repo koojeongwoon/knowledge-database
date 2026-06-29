@@ -1,0 +1,7 @@
+{
+  "topics/Finance/금리.md": {
+    "refresh_interval": "3d",
+    "refresh_source": "fred_api",
+    "last_refresh": "2026-06-29"
+  }
+}

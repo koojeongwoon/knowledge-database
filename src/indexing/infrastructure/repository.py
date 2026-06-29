@@ -87,6 +87,15 @@ class PostgresIndexingRepository(BaseIndexingRepository):
             """
             cur.execute(create_edges_query)
             
+            create_citations_query = """
+            CREATE TABLE IF NOT EXISTS knowledge_citations (
+                file_path VARCHAR(512) PRIMARY KEY,
+                citation_count INT NOT NULL DEFAULT 0,
+                last_cited_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+            cur.execute(create_citations_query)
+            
             cur.execute("ALTER TABLE knowledge_edges ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 1.0;")
             
             try:
@@ -281,6 +290,13 @@ class SqliteIndexingRepository(BaseIndexingRepository):
             weight REAL NOT NULL DEFAULT 1.0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(source_path, target_topic)
+        );
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_citations (
+            file_path TEXT PRIMARY KEY,
+            citation_count INTEGER NOT NULL DEFAULT 0,
+            last_cited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
         try:

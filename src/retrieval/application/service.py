@@ -82,8 +82,23 @@ class WikiSearcher:
             rerank_pool_size = max(limit * 3, 15)
             fused = self._rerank(query_obj.text, fused[:rerank_pool_size], top_k=limit * 2)
             score_key = "reranker_score"
+            
+            # 리랭커 점수에 citation boost 적용
+            for doc in fused:
+                citation_count = doc.get("citation_count", 0)
+                if citation_count > 0:
+                    boost = 1.0 + 0.05 * math.log1p(citation_count)
+                    doc["reranker_score"] = min(doc["reranker_score"] * boost, 1.0)
         else:
             score_key = "rrf_score"
+            # RRF 및 similarity 점수에 citation boost 적용
+            for doc in fused:
+                citation_count = doc.get("citation_count", 0)
+                if citation_count > 0:
+                    boost = 1.0 + 0.05 * math.log1p(citation_count)
+                    doc["rrf_score"] = doc["rrf_score"] * boost
+                    if "similarity" in doc:
+                        doc["similarity"] = min(doc["similarity"] * boost, 1.0)
 
         # 5. 임계치 필터링 — 파이프라인 최종 점수 기준
         filtered = []
@@ -123,7 +138,8 @@ class WikiSearcher:
                 # 부모 문맥 전달 (더 넓은 컨텍스트)
                 "content": doc.get("parent_content", doc["content"]),
                 "similarity": doc.get(score_key, 0),
-                "raw_frontmatter": doc.get("raw_frontmatter")  # frontmatter 정보 포함
+                "raw_frontmatter": doc.get("raw_frontmatter"),  # frontmatter 정보 포함
+                "citation_count": doc.get("citation_count", 0)  # [추가] 인용 횟수 전달
             })
             if len(retrieved_docs) >= limit:
                 break

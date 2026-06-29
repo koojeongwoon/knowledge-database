@@ -14,13 +14,23 @@
 
 * **디렉토리 예시**:
   ```text
-  qa/
+  qa/                                             [Q&A 저널 폴더]
   └── 2026-06-21/
-      └── 1430-kubernetes-setup/                  [글 단위 폴더]
+      └── 1430-kubernetes-setup/                  (Page Bundle: 글 단위 독립 폴더)
           ├── 1430-kubernetes-setup.md            (본문 마크다운 파일)
-          └── assets/                             [자동 생성된 미디어 하위 폴더]
+          └── assets/                             (자동 생성된 미디어 폴더)
               ├── architecture-diagram.png        (원본 이미지)
               └── architecture-diagram.png.md     (VLM이 생성한 이미지 사이드카 캐시)
+              
+  topics/                                         [주제별 노트 폴더 - 물리 범주화]
+  ├── Development/                                (관심사 대범주 폴더)
+  │   ├── llm-agent.md                            (최신 메인 노트)
+  │   └── archive/                                (카테고리-레벨 과거 이력 보관)
+  │       └── llm-agent_20260628_0154.md          
+  └── Finance/
+      ├── 금리.md
+      └── archive/
+          └── 금리_20260629_1003.md
   ```
 * **Obsidian 권장 설정**:
   * **새 첨부 파일을 생성할 위치**: `현재 폴더 아래의 하위 폴더` (하위 폴더 이름: `assets`)
@@ -58,7 +68,7 @@ flowchart TD
     end
 ```
 
-* **VLM 이미지 캡셔닝 (`gpt-4o-mini`)**: 이미지 속 오브젝트 나열(객체 감지 대체), 전체 시각 스타일(모던, 코지, 와이어프레임 등) 묘사, OCR 글자 추출을 수행하여 `type: ImageSummary` 프론트매터를 가진 캐시 문서를 자동 생성합니다.
+* **에이전트 자체 멀티모달 분석 (Zero-Cost Direct Agent Vision)**: 외부 VLM API 호출을 100% 도려내어 이미지 전처리 비용을 0원으로 만듭니다. 인덱서(`ImageProcessor`)는 이미지의 메타데이터(경로, 태그)만 포함하는 가벼운 사이드카 문서(`.png.md`)를 로컬에 빠르게 자동 생성하며, 지식 검색 컨텍스트 융합 단계에서 에이전트(나)가 바인딩된 이미지 경로의 원본 바이트를 넘겨받아 직접 본인의 자체 Vision 기능(클라이언트)으로 실시간 해석합니다.
 * **고아 사이드카 청소**: 로컬에서 원본 이미지 파일만 삭제되었을 경우, 매핑된 캐시 파일(`.png.md`)을 감지하여 로컬에서 자동 삭제하고 DB에서도 관련 벡터 데이터를 동기화하여 제거합니다.
 
 ---
@@ -133,7 +143,7 @@ DB_PASSWORD=postgres
 
 # 임베딩 공급자: fake, openai, bge-m3
 EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=sk-proj-...
+OPENAI_API_KEY=sk-proj-... # (VLM 이미지 분석용이 아닌, 오직 텍스트 임베딩 생성용으로 사용됩니다)
 EMBEDDING_DIM=1536
 
 # 지식베이스(Obsidian Vault) 루트 경로 (기본값: '.' 현재 프로젝트 디렉토리)
@@ -159,3 +169,31 @@ uv pip install -e .
   ```bash
   python main.py search "쿠버네티스 레이아웃이 깨질 때 해결법" --limit 2
   ```
+
+---
+
+## 6. 지식 최신성 유지 파이프라인 (Knowledge Refresher)
+
+로컬 지식들이 노화(Drift)되어 낡은 지식이 되는 것을 방지하기 위해, 범주형 스케줄 관리 및 자동 백업/병합 파이프라인을 구축해 운영합니다.
+
+### 1) 시스템 아키텍처 및 폴더 구조
+* **중앙 토픽 맵 (`.agents/topic_map.json`)**: 지식베이스 내 모든 토픽을 대범주 관심사(e.g., `Development`, `Finance`) 단위로 매핑 관리하는 마스터 인덱스입니다.
+* **범주별 스케줄 (`.agents/schedules/`)**: 토픽 맵의 범주명과 1:1 매칭되는 개별 JSON 파일들(e.g., `Finance.json`)로 구성되며, 노정별 갱신 주기(`refresh_interval`), 수집 소스(`refresh_source`), 최종 갱신일(`last_refresh`)을 보관합니다.
+* **커스텀 스킬 패키지 (`.agents/skills/knowledge_refresher/`)**: 
+  - `SKILL.md`: 스킬 호출 메타데이터 규격서
+  - `scripts/run_refresher.py`: 백그라운드에서 만료된 노트를 검사하고 최신 데이터를 긁어와 AI Drift 판정 및 임시 초안을 자동 생성하는 데몬 스크립트.
+  - `scripts/notify_refresher.py`: 검출된 Drift 알림 대장(`.agents/drift_notifications.json`)을 표 형식으로 정돈하여 에이전트 브리핑을 돕는 보조 스크립트.
+
+### 2) 병합(Merge) 및 아카이빙 격리 규칙
+사용자가 갱신 승인(apply_merge)을 트리거할 때 작동합니다.
+1. **아카이빙 격리**: 기존 원본 마크다운 문서 전체를 백업하여 각 관심사 카테고리 디렉터리 내부인 `topics/{Category}/archive/` 폴더 하위에 `[원본명]_[UTC타임스탬프].md` 포맷으로 자동 이관합니다. (아카이브 문서는 `type: Archive` 메타데이터를 부여받아 격리됩니다.)
+2. **원본 노트 대체**: 원본 마크다운 본문은 지저분하게 추가 누적되지 않고, 최신 제안본(Suggested Merge)으로 **완전 대체**되어 늘 콤팩트하고 정확한 최신 뷰를 유지합니다.
+
+### 3) 런타임 제약 사항 및 OCI 무중단 배포 가이드
+* **Antigravity 의존성**: Antigravity 내장 `schedule` 도구를 사용해 등록된 백그라운드 크론은 **호스트 PC가 켜져 있고 Antigravity 런타임 프로세스가 실행 중일 때만 동작**합니다. PC 절전(Sleep) 혹은 오프라인 시에는 작업이 누락되거나 보류됩니다.
+* **OCI 상시 배치 이식**: 로컬 환경 제약 없이 24시간 무중단 가동을 달성하기 위해 OCI(Oracle Cloud Infrastructure) 서버의 Native `crontab`에 스크립트를 직접 등록해 운영하는 방식을 권장합니다.
+  ```bash
+  # Linux crontab -e 설정 예시 (매일 자정 가동)
+  0 0 * * * cd /path/to/knowledge && .venv/bin/python .agents/skills/knowledge_refresher/scripts/run_refresher.py >> /var/log/knowledge_refresher.log 2>&1
+  ```
+

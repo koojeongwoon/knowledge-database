@@ -1,0 +1,50 @@
+{
+  "Development": [
+    "topics/Development/domain-driven-design.md",
+    "topics/Development/microservices.md",
+    "topics/Development/postgresql.md",
+    "topics/Development/paseto.md",
+    "topics/Development/시계열-데이터베이스.md",
+    "topics/Development/graph-rag.md",
+    "topics/Development/llm-wiki.md",
+    "topics/Development/loop-engineering.md",
+    "topics/Development/코드-인덱싱.md",
+    "topics/Development/llm-agent.md"
+  ],
+  "Finance": [
+    "topics/Finance/금리.md",
+    "topics/Finance/MDD.md",
+    "topics/Finance/PBR.md",
+    "topics/Finance/PER.md",
+    "topics/Finance/ROE.md",
+    "topics/Finance/finance-study-roadmap.md",
+    "topics/Finance/경기-순환.md",
+    "topics/Finance/고용-지표.md",
+    "topics/Finance/기술적-분석.md",
+    "topics/Finance/수급-분석.md",
+    "topics/Finance/시장-종합-지표.md",
+    "topics/Finance/신용.md",
+    "topics/Finance/올웨더-포트폴리오.md",
+    "topics/Finance/원자재.md",
+    "topics/Finance/인플레이션.md",
+    "topics/Finance/자산-배분.md",
+    "topics/Finance/장단기-금리차.md",
+    "topics/Finance/재무제표.md",
+    "topics/Finance/재정-정책.md",
+    "topics/Finance/주식-분할-매매.md",
+    "topics/Finance/주식.md",
+    "topics/Finance/지정학적-리스크.md",
+    "topics/Finance/채권.md",
+    "topics/Finance/통화량.md",
+    "topics/Finance/투자-세금.md",
+    "topics/Finance/투자-심리학.md",
+    "topics/Finance/환율.md"
+  ],
+  "Automation": [
+    "topics/Automation/blog-image-pipeline.md",
+    "topics/Automation/blog-publishing-agents.md",
+    "topics/Automation/tech-blog-strategy.md",
+    "topics/Automation/wordpress-deployment-pipeline.md",
+    "topics/Automation/oci-infrastructure.md"
+  ]
+}
