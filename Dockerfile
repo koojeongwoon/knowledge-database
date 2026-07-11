@@ -11,13 +11,13 @@ WORKDIR /app
 # pyproject.toml 및 README.md 복사
 COPY pyproject.toml README.md ./
 
-# 의존성 패키지 우선 설치 (캐시 최적화)
-# hatchling 빌드 시스템을 통해 프로젝트 의존성을 빌드/설치합니다.
+# 프로젝트 소스 코드 우선 복사 (hatchling 빌드가 소스를 찾을 수 있도록)
+COPY src/ ./src/
+
+# 의존성 패키지 및 프로젝트 빌드/설치
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
-# 프로젝트 소스 코드 및 디렉토리 복사
-COPY src/ ./src/
 
 # 지식 마크다운 문서들이 마운트될 디렉토리 생성
 RUN mkdir -p /app/wiki
