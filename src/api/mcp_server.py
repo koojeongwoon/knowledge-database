@@ -2,12 +2,6 @@ import os
 import sys
 from typing import List, Optional
 
-import boto3
-from botocore.config import Config
-from fastapi import FastAPI, Request, Depends, HTTPException, Header
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
-
 # 프로젝트 루트 디렉토리를 Python Path에 추가하여 절대 import 호환성 확보
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
@@ -15,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from src.api.agent_tool import retrieve_wiki_knowledge, commit_wiki_knowledge, run_wiki_indexing
 
 # FastMCP 서버 이름: LLM-Wiki
-mcp = FastMCP("LLM-Wiki")
+mcp = FastMCP("LLM-Wiki", host="0.0.0.0")
 
 @mcp.tool(name="search_wiki_knowledge")
 def search_wiki_knowledge(query: str, limit: int = 5) -> str:
@@ -56,19 +50,24 @@ def run_database_indexing() -> str:
     return run_wiki_indexing()
 
 # -----------------------------------------------------------------------------
-# FastAPI Wrapper & Auth Server Integration (Stateless Multi-tenant Architecture)
+# Pure ASGI Middleware + SSE App (BaseHTTPMiddleware 사용하지 않음)
 # -----------------------------------------------------------------------------
+import json
 import httpx
-
-app = FastAPI(title="LLM-Wiki MCP SSE Server")
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from src.core.config import current_user_config
 
 # 중앙 인증 서버 검증 URL (환경 변수로 관리)
 AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL")
 
-async def validate_api_key_against_auth_server(token: str) -> dict:
+# FastMCP의 내부 Starlette Streamable HTTP App 획득
+mcp_http_app = mcp.streamable_http_app()
+
+
+async def _validate_api_key(token: str) -> dict:
     """중앙 인증 서버(Auth Server)에 API Key의 유효성을 실시간으로 확인합니다."""
     if not AUTH_SERVER_URL:
-        # 인증 서버 주소가 지정되지 않은 로컬 단독 가동 시에는 검증을 스킵하고 기본 로컬 설정을 쓰도록 처리
         return {"valid": True, "api_key": token}
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -76,114 +75,114 @@ async def validate_api_key_against_auth_server(token: str) -> dict:
                 f"{AUTH_SERVER_URL}/api/auth/validate-key",
                 json={"api_key": token}
             )
-            
             if response.status_code != 200:
-                raise ValueError("Invalid API Key response")
-                
+                return None
             result = response.json()
             if not result.get("valid"):
-                raise ValueError("Unauthorized or deactivated API Key")
-                
+                return None
             return result
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Authentication service temporarily unavailable: {exc}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=401,
-            detail=f"Authentication failed: {str(e)}"
-        )
-
-async def verify_mcp_access(authorization: Optional[str] = Header(None)):
-    """
-    HTTP Authorization 헤더를 추출하여 중앙 인증 서버의 API Key 검증을 위임합니다.
-    """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization Header")
-    
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization format. Use 'Bearer <token>'")
-        
-    token = authorization.split(" ")[1]
-    return await validate_api_key_against_auth_server(token)
+    except Exception:
+        return None
 
 
-# FastMCP의 내부 Starlette SSE App 획득
-mcp_sse_app = mcp.sse_app()
-
-from src.core.config import current_user_config
-
-@app.get("/sse")
-async def handle_sse(request: Request, user = Depends(verify_mcp_access)):
-    """SseServerTransport 연결 수립 엔드포인트"""
-    auth_header = request.headers.get("Authorization", "")
+def _extract_user_config(headers: dict) -> dict:
+    """HTTP 헤더에서 사용자별 설정 정보를 추출합니다."""
+    auth_header = headers.get("authorization", "")
     api_token = ""
-    if auth_header and auth_header.startswith("Bearer "):
-        api_token = auth_header.split(" ")[1]
-        
-    # 헤더에서 직접 실어 보낸 개인 키 및 스토리지 정보 획득
-    openai_key = request.headers.get("X-OpenAI-API-Key")
-    storage_type = request.headers.get("X-Storage-Type", "local")
-    s3_endpoint = request.headers.get("X-S3-Endpoint-URL")
-    s3_access = request.headers.get("X-S3-Access-Key-ID")
-    s3_secret = request.headers.get("X-S3-Secret-Access-Key")
-    s3_bucket = request.headers.get("X-S3-Bucket-Name")
-    
-    user_config = {
+    if auth_header.startswith("Bearer "):
+        api_token = auth_header.split(" ", 1)[1]
+
+    return {
         "api_key": api_token,
-        "openai_api_key": openai_key,
+        "openai_api_key": headers.get("x-openai-api-key"),
         "storage": {
-            "storage_type": storage_type,
-            "s3_endpoint_url": s3_endpoint,
-            "s3_access_key_id": s3_access,
-            "s3_secret_access_key": s3_secret,
-            "s3_bucket_name": s3_bucket
+            "storage_type": headers.get("x-storage-type", "local"),
+            "s3_endpoint_url": headers.get("x-s3-endpoint-url"),
+            "s3_access_key_id": headers.get("x-s3-access-key-id"),
+            "s3_secret_access_key": headers.get("x-s3-secret-access-key"),
+            "s3_bucket_name": headers.get("x-s3-bucket-name"),
         }
     }
-    
-    token_val = current_user_config.set(user_config)
-    try:
-        await mcp_sse_app(request.scope, request.receive, request._send)
-    finally:
-        current_user_config.reset(token_val)
 
-@app.post("/messages")
-async def handle_messages(request: Request, user = Depends(verify_mcp_access)):
-    """MCP 프로토콜 메시지 전송 엔드포인트"""
-    auth_header = request.headers.get("Authorization", "")
-    api_token = ""
-    if auth_header and auth_header.startswith("Bearer "):
-        api_token = auth_header.split(" ")[1]
-        
-    # 동일하게 헤더에서 개인 설정 정보 획득
-    openai_key = request.headers.get("X-OpenAI-API-Key")
-    storage_type = request.headers.get("X-Storage-Type", "local")
-    s3_endpoint = request.headers.get("X-S3-Endpoint-URL")
-    s3_access = request.headers.get("X-S3-Access-Key-ID")
-    s3_secret = request.headers.get("X-S3-Secret-Access-Key")
-    s3_bucket = request.headers.get("X-S3-Bucket-Name")
-    
-    user_config = {
-        "api_key": api_token,
-        "openai_api_key": openai_key,
-        "storage": {
-            "storage_type": storage_type,
-            "s3_endpoint_url": s3_endpoint,
-            "s3_access_key_id": s3_access,
-            "s3_secret_access_key": s3_secret,
-            "s3_bucket_name": s3_bucket
+
+async def _send_json_error(send, status: int, detail: str):
+    """ASGI send를 통해 JSON 에러 응답을 직접 전송합니다."""
+    body = json.dumps({"detail": detail}).encode("utf-8")
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            [b"content-type", b"application/json"],
+            [b"content-length", str(len(body)).encode()],
+        ],
+    })
+    await send({
+        "type": "http.response.body",
+        "body": body,
+    })
+
+
+class MCPAuthMiddleware:
+    """
+    순수 ASGI 미들웨어 — BaseHTTPMiddleware를 사용하지 않으므로
+    SSE StreamingResponse가 버퍼링되거나 파괴되지 않습니다.
+
+    역할:
+    1. Authorization 헤더 검증 (인증 서버 위임)
+    2. 사용자별 설정을 ContextVar에 주입
+    3. SSL Offloading 시 scheme을 https로 강제 전환
+    4. 사용자별 설정을 ContextVar에 주입하여 멀티테넌트 지원
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            # WebSocket 등 비-HTTP 요청은 그냥 통과
+            await self.app(scope, receive, send)
+            return
+
+        # 헤더를 딕셔너리로 변환 (소문자 키)
+        headers = {
+            k.decode("latin-1").lower(): v.decode("latin-1")
+            for k, v in scope.get("headers", [])
         }
-    }
-    
-    token_val = current_user_config.set(user_config)
-    try:
-        await mcp_sse_app(request.scope, request.receive, request._send)
-    finally:
-        current_user_config.reset(token_val)
+
+        path = scope.get("path", "")
+        method = scope.get("method", "GET").upper()
+
+        # ─── 인증 검증 ───
+        if AUTH_SERVER_URL and path in ("/mcp",):
+            auth_header = headers.get("authorization", "")
+            if not auth_header.startswith("Bearer "):
+                await _send_json_error(send, 401, "Missing or invalid Authorization header")
+                return
+
+            token = auth_header.split(" ", 1)[1]
+            result = await _validate_api_key(token)
+            if result is None:
+                await _send_json_error(send, 401, "Unauthorized or invalid API Key")
+                return
+
+
+        # ─── SSL Offloading 환경 ───
+        if AUTH_SERVER_URL:
+            scope["scheme"] = "https"
+
+        # ─── 사용자 설정 ContextVar 주입 ───
+        user_config = _extract_user_config(headers)
+        token_val = current_user_config.set(user_config)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            current_user_config.reset(token_val)
+
+
+# Streamable HTTP App에 순수 ASGI 미들웨어를 감싸서 최종 app 생성
+app = MCPAuthMiddleware(mcp_http_app)
+
 
 if __name__ == "__main__":
     import uvicorn
-    # 기본 포트 8000번으로 원격 수신 대기 시작
     uvicorn.run(app, host="0.0.0.0", port=8000)

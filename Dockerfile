@@ -11,12 +11,14 @@ WORKDIR /app
 # pyproject.toml 및 README.md 복사
 COPY pyproject.toml README.md ./
 
-# 프로젝트 소스 코드 우선 복사 (hatchling 빌드가 소스를 찾을 수 있도록)
-COPY src/ ./src/
-
-# 의존성 패키지 및 프로젝트 빌드/설치
-RUN pip install --no-cache-dir --upgrade pip && \
+# 의존성만 미리 설치하기 위해 빈 패키지를 만들어 캐싱 레이어 형성
+RUN mkdir src && touch src/__init__.py && \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
+
+# 실제 소스 코드 복사 후, 의존성 제외하고 프로젝트 최신화 (다음 빌드 시 1초 내로 통과)
+COPY src/ ./src/
+RUN pip install --no-cache-dir --no-deps .
 
 
 # 지식 마크다운 문서들이 마운트될 디렉토리 생성
