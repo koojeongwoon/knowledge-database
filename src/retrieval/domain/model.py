@@ -1,6 +1,6 @@
-import math
 from typing import List, Dict, Any, Tuple
-from collections import defaultdict
+from typing import List, Dict, Any, Tuple
+
 
 class Query:
     """사용자가 입력한 질문 정보를 캡슐화한 Value Object"""

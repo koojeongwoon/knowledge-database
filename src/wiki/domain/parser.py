@@ -1,15 +1,14 @@
-import re
-import yaml
 import hashlib
+import re
 from typing import Dict, Any, List
 
-def parse_markdown_file(file_path: str) -> Dict[str, Any]:
+import yaml
+
+
+def parse_markdown_content(content: str, file_path_for_log: str = None) -> Dict[str, Any]:
     """
-    마크다운 파일을 읽어 YAML Frontmatter와 본문(body), 그리고 전체 파일의 SHA-256 해시를 리턴합니다.
+    마크다운 텍스트 콘텐츠를 받아 YAML Frontmatter와 본문(body), 그리고 전체 파일의 SHA-256 해시를 리턴합니다.
     """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
     content_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
     
     pattern = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
@@ -23,7 +22,8 @@ def parse_markdown_file(file_path: str) -> Dict[str, Any]:
         try:
             frontmatter = yaml.safe_load(yaml_content) or {}
         except Exception as e:
-            print(f"Warning: Failed to parse YAML frontmatter in {file_path}. Error: {e}")
+            file_info = f" in {file_path_for_log}" if file_path_for_log else ""
+            print(f"Warning: Failed to parse YAML frontmatter{file_info}. Error: {e}")
         
         body = content[match.end():]
         
@@ -32,6 +32,15 @@ def parse_markdown_file(file_path: str) -> Dict[str, Any]:
         "body": body.strip(),
         "content_hash": content_hash
     }
+
+def parse_markdown_file(file_path: str) -> Dict[str, Any]:
+    """
+    마크다운 파일을 읽어 YAML Frontmatter와 본문(body), 그리고 전체 파일의 SHA-256 해시를 리턴합니다.
+    (하위 호환성 유지)
+    """
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return parse_markdown_content(content, file_path)
 
 def extract_wiki_links(body: str) -> List[str]:
     """

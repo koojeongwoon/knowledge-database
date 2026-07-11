@@ -1,4 +1,5 @@
 import os
+
 from dotenv import load_dotenv
 
 # .env 파일 로드 (시스템 환경 변수가 있더라도 .env 파일 설정으로 덮어씀)
@@ -6,6 +7,13 @@ load_dotenv(override=True)
 
 # 지식베이스(Obsidian Vault) 루트 디렉토리 설정 (기본값: 현재 디렉토리)
 WIKI_DIR = os.path.abspath(os.getenv("WIKI_DIR", "."))
+
+# 스토리지 유형 설정 (local, s3)
+STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "")
+S3_ACCESS_KEY_ID = os.getenv("S3_ACCESS_KEY_ID", "")
+S3_SECRET_ACCESS_KEY = os.getenv("S3_SECRET_ACCESS_KEY", "")
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "")
 
 DB_TYPE = os.getenv("DB_TYPE", "postgres").lower()
 DB_HOST = os.getenv("DB_HOST", "localhost")
@@ -39,3 +47,8 @@ SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.35"))
 # Cross-Encoder 리랭커 설정 (비활성 시 RRF 결과를 그대로 사용)
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
 RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+
+import contextvars
+current_user_config = contextvars.ContextVar("current_user_config", default={})
+
+

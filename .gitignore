@@ -16,7 +16,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
-k8s/secret.yaml
+
+# Kubernetes Manifests
+k8s/
+
 
 # macOS system files
 .DS_Store
@@ -48,3 +51,18 @@ attachments/
 scratch/
 *.log
 *.pid
+
+# Malware Scanner (screener) project
+malware-scanner/
+
+# Custom Tools
+tools/
+
+# Playwright MCP Cache/Config
+.playwright-mcp/
+
+# Kubernetes Infrastructure
+k8s-infra/
+
+
+

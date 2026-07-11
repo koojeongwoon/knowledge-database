@@ -1,15 +1,12 @@
-import re
 import math
 from typing import List, Dict, Any
-from collections import defaultdict
+
+from src.core.config import SIMILARITY_THRESHOLD, RERANKER_ENABLED, RERANKER_MODEL, RRF_K
 from src.core.database.factory import DatabaseManager
 from src.indexing.domain.embedding import BaseEmbeddingService
-from src.core.config import SIMILARITY_THRESHOLD, RERANKER_ENABLED, RERANKER_MODEL, RRF_K
-
-
 from src.retrieval.domain.model import Query, RankFusion
-
 from src.retrieval.infrastructure.repository import RetrievalRepository
+
 
 class WikiSearcher:
     def __init__(self, db_manager: DatabaseManager, embedding_service: BaseEmbeddingService):

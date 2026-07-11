@@ -1,9 +1,14 @@
-from typing import List, Dict, Any
+import os
 import json
+from typing import List, Dict, Any
+
+from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, DB_TYPE
 from src.core.database.factory import DatabaseManager
+from src.core.storage.factory import StorageManager
 from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
-from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR, DB_TYPE
 from src.retrieval.application.service import WikiSearcher
+
+
 
 def increment_citation_count(file_paths: List[str], db_manager: DatabaseManager):
     """
@@ -19,42 +24,33 @@ def increment_citation_count(file_paths: List[str], db_manager: DatabaseManager)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     conn = db_manager.conn
     
-    # SQLite와 Postgres를 구분하여 커서 생성 및 실행
+    # Postgres 전용 커서 생성 및 실행
     cur = conn.cursor()
     try:
         for path in file_paths:
-            if DB_TYPE == "sqlite":
-                cur.execute("""
-                    INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
-                    VALUES (?, 1, ?)
-                    ON CONFLICT (file_path) DO UPDATE SET
-                        citation_count = knowledge_citations.citation_count + 1,
-                        last_cited_at = excluded.last_cited_at;
-                """, (path, now))
-            else:
-                cur.execute("""
-                    INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
-                    VALUES (%s, 1, %s)
-                    ON CONFLICT (file_path) DO UPDATE SET
-                        citation_count = knowledge_citations.citation_count + 1,
-                        last_cited_at = EXCLUDED.last_cited_at;
-                """, (path, now))
+            cur.execute("""
+                INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
+                VALUES (%s, 1, %s)
+                ON CONFLICT (file_path) DO UPDATE SET
+                    citation_count = knowledge_citations.citation_count + 1,
+                    last_cited_at = EXCLUDED.last_cited_at;
+            """, (path, now))
         conn.commit()
     except Exception as e:
-        if DB_TYPE != "sqlite":
-            conn.rollback()
+        conn.rollback()
         print(f"Warning: Failed to update DB citations: {e}")
     finally:
         cur.close()
             
-    # 2. 로컬 citations.json 백업/동기화
-    citations_file = os.path.join(WIKI_DIR, ".agents", "citations.json")
+    # 2. 로컬/S3 citations.json 백업/동기화
+    storage = StorageManager()
+    citations_file = os.path.join(".agents", "citations.json")
     citations_data = {}
-    os.makedirs(os.path.dirname(citations_file), exist_ok=True)
-    if os.path.exists(citations_file):
+    
+    if storage.exists(citations_file):
         try:
-            with open(citations_file, 'r', encoding='utf-8') as f:
-                citations_data = json.load(f)
+            content = storage.read_text(citations_file)
+            citations_data = json.loads(content)
         except Exception:
             pass
             
@@ -65,8 +61,8 @@ def increment_citation_count(file_paths: List[str], db_manager: DatabaseManager)
         citations_data[path]["last_cited_at"] = now
         
     try:
-        with open(citations_file, 'w', encoding='utf-8') as f:
-            json.dump(citations_data, f, ensure_ascii=False, indent=2)
+        json_str = json.dumps(citations_data, ensure_ascii=False, indent=2)
+        storage.write_text(citations_file, json_str)
     except Exception as e:
         print(f"Warning: Failed to write citations.json: {e}")
 
@@ -142,9 +138,8 @@ def commit_wiki_knowledge(title: str, description: str, tags: List[str], content
     import os
     import datetime
     import re
-    import shutil
 
-    root_dir = WIKI_DIR
+    storage = StorageManager()
     now = datetime.datetime.now(datetime.timezone.utc)
     
     # 1. 파일명 슬러그 생성 헬퍼
@@ -161,9 +156,9 @@ def commit_wiki_knowledge(title: str, description: str, tags: List[str], content
     if not title_slug:
         title_slug = "qa-journal"
         
-    # Page Bundle 구조: 글 하나당 독립된 폴더를 생성하여 관리
-    qa_bundle_dir = os.path.join(root_dir, "qa", date_str, f"{time_str}-{title_slug}")
-    os.makedirs(qa_bundle_dir, exist_ok=True)
+    # Page Bundle 구조 (상대 경로로 관리)
+    qa_bundle_dir = os.path.join("qa", date_str, f"{time_str}-{title_slug}")
+    storage.makedirs(qa_bundle_dir)
     qa_file_path = os.path.join(qa_bundle_dir, f"{time_str}-{title_slug}.md")
     
     # 2-1. 리소스 파일(이미지, 오디오, 문서 등) 복사 및 링크 생성
@@ -189,17 +184,18 @@ def commit_wiki_knowledge(title: str, description: str, tags: List[str], content
     
     if all_resources:
         assets_dir = os.path.join(qa_bundle_dir, "assets")
-        os.makedirs(assets_dir, exist_ok=True)
+        storage.makedirs(assets_dir)
         
         copied_images = []
         copied_files = []
         image_extensions = (".png", ".jpg", ".jpeg", ".webp", ".gif")
         
         for res_path in all_resources:
+            # 로컬 임시 파일 존재 여부 검사 (업로드 대상)
             if os.path.exists(res_path):
                 filename = os.path.basename(res_path)
                 dest_path = os.path.join(assets_dir, filename)
-                shutil.copy(res_path, dest_path)
+                storage.copy_file(res_path, dest_path)
                 
                 # 확장자에 맞춰 위키링크 생성
                 is_image = filename.lower().endswith(image_extensions)
@@ -231,8 +227,7 @@ timestamp: "{now.isoformat()}"
 {s_content}
 """
                     sidecar_file_path = os.path.join(assets_dir, f"{filename}.md")
-                    with open(sidecar_file_path, "w", encoding="utf-8") as sf:
-                        sf.write(sidecar_content)
+                    storage.write_text(sidecar_file_path, sidecar_content)
         
         attachments_md = []
         if copied_images:
@@ -261,8 +256,7 @@ source: "agent-commit"
 {content}
 """
     try:
-        with open(qa_file_path, 'w', encoding='utf-8') as f:
-            f.write(qa_content)
+        storage.write_text(qa_file_path, qa_content)
     except Exception as e:
         return f"Q&A 저널 파일 작성 실패: {e}"
 
@@ -273,40 +267,39 @@ source: "agent-commit"
         topic_file_path = None
         
         # 3-1. topic_map.json 조회하여 기존 카테고리 경로가 있는지 확인
-        topic_map_path = os.path.join(root_dir, ".agents", "topic_map.json")
-        if os.path.exists(topic_map_path):
+        topic_map_path = os.path.join(".agents", "topic_map.json")
+        if storage.exists(topic_map_path):
             try:
-                with open(topic_map_path, 'r', encoding='utf-8') as f:
-                    topic_map = json.load(f)
+                content = storage.read_text(topic_map_path)
+                topic_map = json.loads(content)
                 for cat, files in topic_map.items():
                     for f_rel in files:
                         if os.path.basename(f_rel) == f"{topic_slug}.md":
-                            topic_file_path = os.path.join(root_dir, f_rel)
+                            topic_file_path = f_rel
                             break
                     if topic_file_path:
                         break
             except Exception:
                 pass
                 
-        # 3-2. 찾지 못했다면 물리적 재귀 탐색을 통해 기존 파일 위치 추적
-        if not topic_file_path or not os.path.exists(topic_file_path):
-            topics_search_dir = os.path.join(root_dir, "topics")
-            for root, _, files in os.walk(topics_search_dir):
-                if f"{topic_slug}.md" in files:
-                    topic_file_path = os.path.join(root, f"{topic_slug}.md")
+        # 3-2. 찾지 못했다면 물리/가상 스토리지 재귀 탐색을 통해 기존 파일 위치 추적
+        if not topic_file_path or not storage.exists(topic_file_path):
+            topic_files = storage.list_files("topics", "*.md")
+            for f_rel in topic_files:
+                if os.path.basename(f_rel) == f"{topic_slug}.md":
+                    topic_file_path = f_rel
                     break
                     
         # 3-3. 둘 다 없으면 신규 생성용 루트 기본값 설정
         if not topic_file_path:
-            topic_file_path = os.path.join(root_dir, "topics", f"{topic_slug}.md")
+            topic_file_path = os.path.join("topics", f"{topic_slug}.md")
             
-        os.makedirs(os.path.dirname(topic_file_path), exist_ok=True)
+        storage.makedirs(os.path.dirname(topic_file_path))
         
         # 파일이 존재하면 누적 업데이트
-        if os.path.exists(topic_file_path):
+        if storage.exists(topic_file_path):
             try:
-                with open(topic_file_path, 'r', encoding='utf-8') as f:
-                    old_content = f.read()
+                old_content = storage.read_text(topic_file_path)
                 
                 # 기존 콘텐츠 하단에 업데이트 추가
                 synthesis_text = f"\n\n### 업데이트 ({date_str})\n{topic_update_text}"
@@ -319,8 +312,7 @@ source: "agent-commit"
                     new_content
                 )
                 
-                with open(topic_file_path, 'w', encoding='utf-8') as f:
-                    f.write(new_content)
+                storage.write_text(topic_file_path, new_content)
                 topic_info = f" 및 토픽 '{topic_slug}.md' 누적 합성"
             except Exception as e:
                 return f"Q&A 저널은 작성되었으나 토픽 합성 중 실패: {e}"
@@ -339,13 +331,13 @@ timestamp: "{now.isoformat()}"
 {topic_update_text or '내용을 입력하세요.'}
 """
             try:
-                with open(topic_file_path, 'w', encoding='utf-8') as f:
-                    f.write(topic_content)
+                storage.write_text(topic_file_path, topic_content)
                 topic_info = f" 및 신규 토픽 '{topic_slug}.md' 생성"
             except Exception as e:
                 return f"Q&A 저널은 작성되었으나 토픽 생성 중 실패: {e}"
 
-    rel_qa_path = os.path.relpath(qa_file_path, root_dir)
+    # WIKI_DIR 기준의 상대경로 획득
+    rel_qa_path = qa_file_path
     return (
         f"성공: 지식이 마크다운 파일로 영속화되었습니다.\n"
         f"- Q&A 저널: {rel_qa_path}{topic_info}{resource_info}\n\n"

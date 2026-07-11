@@ -1,8 +1,10 @@
-from abc import ABC, abstractmethod
-from typing import List
+import os
 import hashlib
 import random
-import os
+from abc import ABC, abstractmethod
+from typing import List, Optional
+
+
 
 class BaseEmbeddingService(ABC):
     @abstractmethod
@@ -57,16 +59,35 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
     """
     OpenAI Embedding API를 사용하는 임베딩 서비스
     """
-    def __init__(self, model_name: str = "text-embedding-3-small", dimension: int = 1536):
+    def __init__(self, model_name: str = "text-embedding-3-small", dimension: int = 1536, api_key: Optional[str] = None):
         self.model_name = model_name
         self.dimension = dimension
         
         # lazy import to avoid start-up overhead
         from openai import OpenAI
-        api_key = os.getenv("OPENAI_API_KEY")
+        
+        # 1. 인자로 넘어온 api_key가 없으면, 유저 컨텍스트를 활용해 로드 (DB 의존성 배제)
         if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is not set.")
+            try:
+                from src.core.config import current_user_config
+                config = current_user_config.get() or {}
+                api_key = config.get("openai_api_key")
+            except Exception:
+                pass
+                
+        # 2. 컨텍스트에도 없으면 전역 환경변수(os.getenv) 폴백 (로컬 구동 하위 호환성)
+        if not api_key:
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+        # 3. 여전히 키가 없다면 에러 발생
+        if not api_key:
+            raise ValueError(
+                "OpenAI API Key가 설정되지 않았거나 유효하지 않습니다. "
+                "통합인증 및 에이전트 설정(mcp.json)에 OpenAI API Key를 주입해 주세요."
+            )
+            
         self.client = OpenAI(api_key=api_key)
+
 
     def embed_text(self, text: str) -> List[float]:
         # text-embedding-3 모델들은 차원 지정을 지원합니다.

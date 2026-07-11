@@ -197,3 +197,60 @@ uv pip install -e .
   0 0 * * * cd /path/to/knowledge && .venv/bin/python .agents/skills/knowledge_refresher/scripts/run_refresher.py >> /var/log/knowledge_refresher.log 2>&1
   ```
 
+
+## 7. MCP 서버 연동 및 배포 구성 (Stateless & Local-First)
+
+지식베이스 MCP 서버는 어떠한 민감 정보(R2 스토리지 비밀키, OpenAI API Key)도 원격 서버나 DB에 보관하지 않으며, 사용자의 개인 PC(`mcp.json`) 환경에만 고스란히 격리하여 가동하는 **Stateless(무상태) 및 Local-First 보안 아키텍처**를 지원합니다.
+
+### 1) 클라우드 원격 서버 배포 연동 (`mcp.json` 설정)
+클라우드(OCI 등)에 백엔드 서버를 띄워두고, 로컬 PC에 Node.js(`npx`)의 설치 없이 직접 HTTPS 및 SSE로 다이렉트 연동을 맺는 표준 명세 설정입니다.
+
+```json
+{
+  "mcpServers": {
+    "llm-wiki": {
+      "type": "sse",
+      "url": "https://mcp.lynply.com/sse",
+      "headers": {
+        "Authorization": "Bearer your-integrated-auth-token",
+        "X-OpenAI-API-Key": "sk-proj-your-openai-api-key",
+        "X-Storage-Type": "s3",
+        "X-S3-Endpoint-URL": "https://<account-id>.r2.cloudflarestorage.com",
+        "X-S3-Access-Key-ID": "your-r2-access-key-id",
+        "X-S3-Secret-Access-Key": "your-r2-secret-access-key",
+        "X-S3-Bucket-Name": "your-wiki-bucket-name"
+      }
+    }
+  }
+}
+```
+
+* **보안 작동**: 클라이언트(Cursor 등)가 기동 시 위 `headers`에 등록된 키를 HTTPS 암호화 스트림에 실어 원격 백엔드로 쏘며, 서버는 이를 요청 수명 주기 동안만 메모리상(ContextVar)에서 활용한 뒤 **즉시 소멸**합니다. HTTPS 전송 계층 암호화(TLS)가 강제되므로 전송 중간의 탈취는 원천적으로 차단됩니다.
+
+### 2) 로컬 단독 가동 방식 (Local Vault 직접 스캔)
+소스코드를 개인 PC에 직접 받아 로컬 호스트 내부에서 지식베이스를 단독 구동하고 싶을 때 사용합니다.
+
+```json
+{
+  "mcpServers": {
+    "llm-wiki-local": {
+      "command": "python",
+      "args": ["/absolute/path/to/src/api/mcp_server.py"],
+      "env": {
+        "OPENAI_API_KEY": "sk-proj-your-openai-api-key",
+        "STORAGE_TYPE": "local",
+        "WIKI_DIR": "/absolute/path/to/your/obsidian/vault"
+      }
+    }
+  }
+}
+```
+
+* **보안 작동**: `STORAGE_TYPE`을 `local`로 명시하면 원격 S3 클라우드를 거치지 않고 지정한 `WIKI_DIR` 경로의 로컬 Obsidian Vault 파일 시스템을 즉각 직접 사용하게 됩니다.
+
+### 3) 3대 핵심 연동 키 명세
+* **`Authorization (Bearer)`**: 통합인증 포털(`auth.lynply.com`)에서 발급하는 에이전트 식별용 유니크 API Key
+* **`X-OpenAI-API-Key`**: 텍스트 벡터 연산(Embedding)을 수행할 사용자의 개인 OpenAI API Key
+* **스토리지 키 (`X-S3-...`)**: 가상 클라우드 Vault(R2/S3) 연결용 Endpoint URL, Credential 및 Bucket 명세
+
+

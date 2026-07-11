@@ -1,11 +1,9 @@
 import psycopg2
-from psycopg2.extras import execute_values
 from pgvector.psycopg2 import register_vector
-from typing import List, Dict, Any, Optional
-import json
 
-from src.core.config import DATABASE_URL, EMBEDDING_DIM
+from src.core.config import DATABASE_URL
 from src.core.database.base import BaseDatabaseManager
+
 
 class PostgresDatabaseManager(BaseDatabaseManager):
     def __init__(self):

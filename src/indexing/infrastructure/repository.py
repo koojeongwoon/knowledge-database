@@ -1,10 +1,12 @@
+import json
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any
-import json
+
 import psycopg2
 from psycopg2.extras import execute_values
-from pgvector.psycopg2 import register_vector
-from src.core.config import DB_TYPE, EMBEDDING_DIM
+
+from src.core.config import EMBEDDING_DIM
+
 
 class BaseIndexingRepository(ABC):
     @abstractmethod
@@ -250,155 +252,5 @@ class PostgresIndexingRepository(BaseIndexingRepository):
             cur.execute("DELETE FROM knowledge_edges WHERE source_path = %s;", (file_path,))
 
 
-class SqliteIndexingRepository(BaseIndexingRepository):
-    def __init__(self, db_manager):
-        self.db_manager = db_manager
-
-    def _json_serializer(self, obj):
-        import datetime
-        if isinstance(obj, (datetime.datetime, datetime.date)):
-            return obj.isoformat()
-        raise TypeError(f"Type {type(obj)} not serializable")
-
-    def initialize_db(self):
-        self.db_manager.connect()
-        conn = self.db_manager.conn
-        cursor = conn.cursor()
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_path TEXT NOT NULL,
-            chunk_index INTEGER NOT NULL,
-            doc_type TEXT NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT,
-            tags TEXT,
-            content TEXT NOT NULL,
-            parent_content TEXT NOT NULL,
-            raw_frontmatter TEXT,
-            content_hash TEXT NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            embedding TEXT,
-            UNIQUE(file_path, chunk_index)
-        );
-        """)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_edges (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL,
-            target_topic TEXT NOT NULL,
-            weight REAL NOT NULL DEFAULT 1.0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(source_path, target_topic)
-        );
-        """)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_citations (
-            file_path TEXT PRIMARY KEY,
-            citation_count INTEGER NOT NULL DEFAULT 0,
-            last_cited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """)
-        try:
-            cursor.execute("ALTER TABLE knowledge_edges ADD COLUMN weight REAL NOT NULL DEFAULT 1.0;")
-        except Exception:
-            pass
-
-        cursor.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_documents_fts USING fts5(
-            file_path UNINDEXED,
-            chunk_index UNINDEXED,
-            title,
-            content
-        );
-        """)
-        conn.commit()
-
-    def get_all_file_hashes(self) -> Dict[str, str]:
-        self.db_manager.connect()
-        conn = self.db_manager.conn
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT file_path, content_hash FROM knowledge_documents;")
-        rows = cursor.fetchall()
-        return {row["file_path"]: row["content_hash"] for row in rows}
-
-    def upsert_document_chunk(self, doc_data: Dict[str, Any]):
-        self.upsert_document_chunks_batch([doc_data])
-
-    def upsert_document_chunks_batch(self, chunks: List[Dict[str, Any]], batch_size: int = 50):
-        if not chunks:
-            return
-        self.db_manager.connect()
-        conn = self.db_manager.conn
-        cursor = conn.cursor()
-        
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
-            for doc_data in batch:
-                tags = doc_data.get("tags", [])
-                tags_str = ",".join(tags) if isinstance(tags, list) else str(tags) if tags else ""
-                embedding_str = json.dumps(doc_data["embedding"])
-                raw_fm = json.dumps(doc_data.get("raw_frontmatter", {}), default=self._json_serializer)
-                
-                cursor.execute("""
-                INSERT INTO knowledge_documents (
-                    file_path, chunk_index, doc_type, title, description, tags, content, parent_content, raw_frontmatter, content_hash, embedding
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(file_path, chunk_index) DO UPDATE SET
-                    doc_type=excluded.doc_type,
-                    title=excluded.title,
-                    description=excluded.description,
-                    tags=excluded.tags,
-                    content=excluded.content,
-                    parent_content=excluded.parent_content,
-                    raw_frontmatter=excluded.raw_frontmatter,
-                    content_hash=excluded.content_hash,
-                    embedding=excluded.embedding;
-                """, (
-                    doc_data["file_path"],
-                    doc_data.get("chunk_index", 0),
-                    doc_data["doc_type"],
-                    doc_data["title"],
-                    doc_data.get("description", ""),
-                    tags_str,
-                    doc_data["content"],
-                    doc_data.get("parent_content", doc_data["content"]),
-                    raw_fm,
-                    doc_data["content_hash"],
-                    embedding_str
-                ))
-                
-                cursor.execute("DELETE FROM knowledge_documents_fts WHERE file_path = ? AND chunk_index = ?;", (doc_data["file_path"], doc_data.get("chunk_index", 0)))
-                cursor.execute("""
-                INSERT INTO knowledge_documents_fts (file_path, chunk_index, title, content)
-                VALUES (?, ?, ?, ?);
-                """, (doc_data["file_path"], doc_data.get("chunk_index", 0), doc_data["title"], doc_data["content"]))
-                
-        conn.commit()
-
-    def insert_edge(self, source_path: str, target_topic: str, weight: float = 1.0):
-        self.db_manager.connect()
-        conn = self.db_manager.conn
-        cursor = conn.cursor()
-        cursor.execute("""
-        INSERT INTO knowledge_edges (source_path, target_topic, weight)
-        VALUES (?, ?, ?)
-        ON CONFLICT(source_path, target_topic) DO UPDATE SET weight=excluded.weight;
-        """, (source_path, target_topic, weight))
-        conn.commit()
-
-    def delete_document(self, file_path: str):
-        self.db_manager.connect()
-        conn = self.db_manager.conn
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM knowledge_documents WHERE file_path = ?;", (file_path,))
-        cursor.execute("DELETE FROM knowledge_documents_fts WHERE file_path = ?;", (file_path,))
-        cursor.execute("DELETE FROM knowledge_edges WHERE source_path = ?;", (file_path,))
-        conn.commit()
-
-
 def IndexingRepository(db_manager) -> BaseIndexingRepository:
-    if DB_TYPE == "sqlite":
-        return SqliteIndexingRepository(db_manager)
-    else:
-        return PostgresIndexingRepository(db_manager)
+    return PostgresIndexingRepository(db_manager)

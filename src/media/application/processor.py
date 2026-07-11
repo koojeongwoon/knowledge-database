@@ -1,6 +1,6 @@
 import os
-import hashlib
-from typing import List, Dict, Any
+from typing import Dict
+
 
 class ImageProcessor:
     def __init__(self, root_dir: str = "."):

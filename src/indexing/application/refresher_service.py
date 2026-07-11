@@ -1,11 +1,12 @@
-import os
 import json
-import glob
+import os
 import re
 import shutil
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
+
 from src.indexing.domain.refresher import RefreshTarget
+
 
 class KnowledgeRefresher:
     def __init__(self, root_dir: str):

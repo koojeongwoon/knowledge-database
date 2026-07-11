@@ -1,10 +1,12 @@
 import os
-import glob
-from typing import List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from src.wiki.domain.parser import parse_markdown_file
+from typing import List, Dict, Any, Tuple
+
+from src.core.config import STORAGE_TYPE
 from src.core.database.factory import DatabaseManager
+from src.core.storage.factory import StorageManager
 from src.indexing.domain.embedding import BaseEmbeddingService
+from src.wiki.domain.parser import parse_markdown_content
 
 # 이 임계치를 초과하는 파일이 변경되었을 때 병렬 처리로 전환
 PARALLEL_THRESHOLD = 10
@@ -15,31 +17,22 @@ from src.indexing.infrastructure.repository import IndexingRepository
 
 class WikiIndexer:
     def __init__(self, root_dir: str, db_manager: DatabaseManager, embedding_service: BaseEmbeddingService):
-        self.root_dir = os.path.abspath(root_dir)
+        self.root_dir = root_dir
         self.db_manager = db_manager
         self.repository = IndexingRepository(db_manager)
         self.embedding_service = embedding_service
         self.target_dirs = ["qa", "topics", "assets", "attachments"]
+        self.storage = StorageManager()
 
     def _get_local_files(self) -> List[str]:
         """
         qa/ 및 topics/ 디렉토리 내의 모든 마크다운 파일들의 상대경로 목록을 가져옵니다.
-        디렉토리가 없으면 자동으로 생성합니다.
         """
         local_files = []
         for target in self.target_dirs:
-            target_path = os.path.join(self.root_dir, target)
-            if not os.path.exists(target_path):
-                # 루트에 해당 폴더가 없더라도 강제 생성하지 않고 스킵 (Page Bundle 구조 대응)
-                continue
-                
-            # .md 파일 재귀 검색 (하위 폴더 포함)
-            search_pattern = os.path.join(target_path, "**", "*.md")
-            for full_path in glob.glob(search_pattern, recursive=True):
-                if os.path.isfile(full_path):
-                    # 루트 디렉토리 기준 상대경로로 변환
-                    rel_path = os.path.relpath(full_path, self.root_dir)
-                    local_files.append(rel_path)
+            # StorageManager의 list_files를 사용하여 물리/가상 스토리지의 파일 스캔
+            files = self.storage.list_files(target, "*.md")
+            local_files.extend(files)
         return local_files
 
     def _process_single_file(self, rel_path: str, is_new: bool, db_manager: DatabaseManager) -> str:
@@ -53,8 +46,8 @@ class WikiIndexer:
         from src.indexing.infrastructure.repository import IndexingRepository
         repo = IndexingRepository(db_manager)
 
-        full_path = os.path.join(self.root_dir, rel_path)
-        parsed_data = parse_markdown_file(full_path)
+        content = self.storage.read_text(rel_path)
+        parsed_data = parse_markdown_content(content, rel_path)
         content_hash = parsed_data["content_hash"]
 
         fm = parsed_data["frontmatter"]
@@ -154,13 +147,17 @@ class WikiIndexer:
         print("Starting LLM-Wiki incremental indexing...")
         
         # 0. 이미지 전처리 프로세스 실행 (사이드카 캐싱)
-        try:
-            from src.media.application.processor import ImageProcessor
-            image_processor = ImageProcessor(root_dir=self.root_dir)
-            image_stats = image_processor.process_images()
-            print(f"[+] Image preprocessing completed. Stats: {image_stats}")
-        except Exception as e:
-            print(f"[✗] Warning: Image preprocessing failed: {e}")
+        # 0. 이미지 전처리 프로세스 실행 (로컬 파일 시스템 전용 사이드카 캐싱)
+        if STORAGE_TYPE == "local":
+            try:
+                from src.media.application.processor import ImageProcessor
+                image_processor = ImageProcessor(root_dir=self.root_dir)
+                image_stats = image_processor.process_images()
+                print(f"[+] Image preprocessing completed. Stats: {image_stats}")
+            except Exception as e:
+                print(f"[✗] Warning: Image preprocessing failed: {e}")
+        else:
+            print("[~] Storage is set to S3/R2. Skipping local image preprocessing.")
         
         # 1. DB 초기화 (테이블 및 인덱스 생성)
         self.repository.initialize_db()
@@ -171,9 +168,9 @@ class WikiIndexer:
         # 2-1. 로컬 메타데이터 캐시 구축 (가중치 계산용)
         self.topic_metadata = {}
         for f in local_files:
-            f_full = os.path.join(self.root_dir, f)
             try:
-                parsed_data = parse_markdown_file(f_full)
+                content = self.storage.read_text(f)
+                parsed_data = parse_markdown_content(content, f)
                 fm = parsed_data.get("frontmatter", {})
                 title = fm.get("title", "")
                 s_path = fm.get("source_path")
@@ -210,8 +207,8 @@ class WikiIndexer:
         # 4. 변경 대상 파일 필터링
         targets: List[Tuple[str, bool]] = []  # (rel_path, is_new)
         for rel_path in local_files:
-            full_path = os.path.join(self.root_dir, rel_path)
-            parsed_data = parse_markdown_file(full_path)
+            content = self.storage.read_text(rel_path)
+            parsed_data = parse_markdown_content(content, rel_path)
             content_hash = parsed_data["content_hash"]
 
             is_new = rel_path not in db_hashes
