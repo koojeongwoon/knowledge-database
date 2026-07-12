@@ -165,7 +165,7 @@ class WikiIndexer:
         # 2. 로컬 파일 목록 및 DB의 파일 해시 맵 획득
         local_files = self._get_local_files()
         
-        # 2-1. 로컬 메타데이터 캐시 구축 (가중치 계산용)
+        # 2-1. 로컬 메타데이터 캐시 구축 (가중치 계산용) 및 토픽 DB 맵 생성
         self.topic_metadata = {}
         for f in local_files:
             try:
@@ -182,8 +182,17 @@ class WikiIndexer:
                 self.topic_metadata[t_slug] = metadata
                 if title:
                     self.topic_metadata[title.lower()] = metadata
-            except Exception:
-                pass
+
+                # topics/ 하위의 마크다운 파일 구조를 분석하여 DB의 knowledge_topics 테이블 동기화
+                if f.replace("\\", "/").startswith("topics/"):
+                    parts = f.replace("\\", "/").split("/")
+                    # topics/Category/filename.md 형식
+                    if len(parts) >= 3:
+                        category = parts[1]
+                        topic_name = os.path.splitext(parts[-1])[0].lower()
+                        self.repository.upsert_topic(topic_name, category, f)
+            except Exception as e:
+                print(f"Warning: Failed to sync topic database for {f}: {e}")
                 
         db_hashes = self.repository.get_all_file_hashes()
         

@@ -1,359 +1,41 @@
-import os
 import json
 from typing import List, Dict, Any
 
-from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, DB_TYPE
+from src.api.decorators import tool_wrapper
+from src.api.exceptions import (
+    WikiBaseException,
+    InvalidArgumentException,
+    DatabaseException,
+)
+from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
+from src.core.config import current_user_config
 from src.core.database.factory import DatabaseManager
-from src.core.storage.factory import StorageManager
+from src.core.logging.audit import log_audit  # 감사 로거 유틸 임포트
 from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
 from src.retrieval.application.service import WikiSearcher
+from src.retrieval.domain.formatter import format_retrieved_documents
+from src.wiki.application.integration import WikiIntegrationManager
 
 
-
-def increment_citation_count(file_paths: List[str], db_manager: DatabaseManager):
-    """
-    RAG 검색 결과로 인용된 문서들의 인용 횟수를 1 증가시킵니다.
-    데이터베이스(knowledge_citations)와 로컬 JSON 파일(.agents/citations.json)에 기록을 동기화합니다.
-    """
-    import os
-    import datetime
-    
-    if not file_paths:
-        return
-        
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = db_manager.conn
-    
-    # Postgres 전용 커서 생성 및 실행
-    cur = conn.cursor()
-    try:
-        for path in file_paths:
-            cur.execute("""
-                INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
-                VALUES (%s, 1, %s)
-                ON CONFLICT (file_path) DO UPDATE SET
-                    citation_count = knowledge_citations.citation_count + 1,
-                    last_cited_at = EXCLUDED.last_cited_at;
-            """, (path, now))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print(f"Warning: Failed to update DB citations: {e}")
-    finally:
-        cur.close()
-            
-    # 2. 로컬/S3 citations.json 백업/동기화
-    storage = StorageManager()
-    citations_file = os.path.join(".agents", "citations.json")
-    citations_data = {}
-    
-    if storage.exists(citations_file):
-        try:
-            content = storage.read_text(citations_file)
-            citations_data = json.loads(content)
-        except Exception:
-            pass
-            
-    for path in file_paths:
-        if path not in citations_data:
-            citations_data[path] = {"citation_count": 0, "last_cited_at": now}
-        citations_data[path]["citation_count"] += 1
-        citations_data[path]["last_cited_at"] = now
-        
-    try:
-        json_str = json.dumps(citations_data, ensure_ascii=False, indent=2)
-        storage.write_text(citations_file, json_str)
-    except Exception as e:
-        print(f"Warning: Failed to write citations.json: {e}")
-
-
+@tool_wrapper
 def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
     """
-    AI 에이전트가 호출할 수 있는 도구(Tool) 함수입니다.
-    사용자의 자연어 질문을 받아 로컬 K8s PostgreSQL pgvector 데이터베이스에서
-    가장 관련성이 높은 마크다운 문서 조각들을 조회(Retrieval)하여 텍스트 형태로 리턴합니다.
+    개인 지식베이스에서 자연어 검색을 수행하고 관련성이 높은 마크다운 지식 조각들을 반환합니다.
     """
-    # 1. 임베딩 공급자 선택
-    if EMBEDDING_PROVIDER == "openai":
-        embedding_service = OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
-    elif EMBEDDING_PROVIDER == "bge-m3":
-        embedding_service = BGEM3EmbeddingService()
-    else:
-        embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
-        
-    db_manager = DatabaseManager()
-    searcher = WikiSearcher(db_manager=db_manager, embedding_service=embedding_service)
-    
+    if not query:
+        raise InvalidArgumentException("검색 쿼리(query)는 비어 있을 수 없습니다.")
+
+    # 사용자 식별용 Config 추출
+    user_config = current_user_config.get() or {}
+    user_id = user_config.get("api_key", "SYSTEM")
+
     try:
-        results = searcher.search(query, limit=limit)
-        if not results:
-            return "지식베이스에서 관련된 문서를 찾지 못했습니다."
-            
-        # 인용된 파일 경로 수집 및 카운트 누적
-        file_paths = [doc["file_path"] for doc in results]
-        increment_citation_count(file_paths, db_manager)
-            
-        formatted_docs = []
-        for doc in results:
-            # Frontmatter에서 image_path 정보 추출 (이미지 RAG 연동용)
-            raw_fm = doc.get("raw_frontmatter") or {}
-            image_path = raw_fm.get("image_path")
-            image_path_str = f"Image Path: {image_path}\n" if image_path else ""
-
-            # 에이전트가 출처와 메타데이터를 인식하기 쉽도록 XML/Markdown 결합 포맷팅
-            doc_str = (
-                f"<document>\n"
-                f"File: {doc['file_path']}\n"
-                f"Title: {doc['title']}\n"
-                f"Type: {doc['doc_type']}\n"
-                f"{image_path_str}"
-                f"Similarity Score: {doc['similarity']:.4f}\n"
-                f"Citation Count: {doc.get('citation_count', 0) + 1}\n"
-                f"Tags: {', '.join(doc['tags']) if doc['tags'] else 'None'}\n"
-                f"Content:\n{doc['content']}\n"
-                f"</document>"
-            )
-            formatted_docs.append(doc_str)
-            
-        return "\n\n---\n\n".join(formatted_docs)
-        
+        db_manager = DatabaseManager()
+        db_manager.connect()
     except Exception as e:
-        return f"지식베이스 조회 중 에러 발생: {str(e)}"
-    finally:
-        db_manager.close()
-
-# 에이전트 프레임워크(예: LangChain) 연동을 위한 툴 정의 스키마 예시
-# langchain_tool_spec = {
-#     "name": "retrieve_wiki_knowledge",
-#     "description": "개인 지식베이스(옵시디언 위키)에서 과거 Q&A 및 토픽을 조회하여 지식을 참조합니다.",
-#     "func": retrieve_wiki_knowledge
-# }
-
-def commit_wiki_knowledge(title: str, description: str, tags: List[str], content: str, topic_name: str = None, topic_update_text: str = None, image_paths: List[str] = None, resource_paths: List[str] = None, resource_summaries: List[Dict[str, Any]] = None) -> str:
-    """
-    새로운 지식을 qa/ 저널에 기록하고, 선택적으로 topics/ 문서를 누적 업데이트합니다.
-    대화 중 전달받은 미디어/자원 파일이 존재할 경우, assets/ 폴더로 복사하고 마크다운 본문에 링크를 삽입하며,
-    resource_summaries가 있으면 통일된 Frontmatter를 가진 독립 요약 문서를 생성합니다.
-    """
-    import os
-    import datetime
-    import re
-
-    storage = StorageManager()
-    now = datetime.datetime.now(datetime.timezone.utc)
-    
-    # 1. 파일명 슬러그 생성 헬퍼
-    def slugify(text):
-        text = text.lower()
-        # 한글 및 영문, 숫자 허용
-        text = re.sub(r'[^\w\s-]', '', text)
-        return re.sub(r'[-\s]+', '-', text).strip('-')
-
-    # 2. Q&A 저널 저장
-    date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H%M")
-    title_slug = slugify(title)
-    if not title_slug:
-        title_slug = "qa-journal"
+        log_audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id, payload={"query": query, "error": f"DB 연결 실패: {e}"})
+        raise DatabaseException(f"데이터베이스 연결에 실패했습니다: {e}") from e
         
-    # Page Bundle 구조 (상대 경로로 관리)
-    qa_bundle_dir = os.path.join("qa", date_str, f"{time_str}-{title_slug}")
-    storage.makedirs(qa_bundle_dir)
-    qa_file_path = os.path.join(qa_bundle_dir, f"{time_str}-{title_slug}.md")
-    
-    # 2-1. 리소스 파일(이미지, 오디오, 문서 등) 복사 및 링크 생성
-    resource_info = ""
-    # 호환성을 위해 image_paths와 resource_paths 통합
-    all_resources = []
-    if image_paths:
-        all_resources.extend(image_paths)
-    if resource_paths:
-        all_resources.extend(resource_paths)
-        
-    # resource_summaries의 file_path들 통합
-    summary_map = {}
-    if resource_summaries:
-        for summary in resource_summaries:
-            f_path = summary.get("file_path")
-            if f_path:
-                all_resources.append(f_path)
-                summary_map[f_path] = summary
-                
-    # 중복 제거
-    all_resources = list(dict.fromkeys(all_resources))
-    
-    if all_resources:
-        assets_dir = os.path.join(qa_bundle_dir, "assets")
-        storage.makedirs(assets_dir)
-        
-        copied_images = []
-        copied_files = []
-        image_extensions = (".png", ".jpg", ".jpeg", ".webp", ".gif")
-        
-        for res_path in all_resources:
-            # 로컬 임시 파일 존재 여부 검사 (업로드 대상)
-            if os.path.exists(res_path):
-                filename = os.path.basename(res_path)
-                dest_path = os.path.join(assets_dir, filename)
-                storage.copy_file(res_path, dest_path)
-                
-                # 확장자에 맞춰 위키링크 생성
-                is_image = filename.lower().endswith(image_extensions)
-                if is_image:
-                    copied_images.append(f"![[assets/{filename}]]")
-                else:
-                    copied_files.append(f"[[assets/{filename}]]")
-                
-                # 매핑된 요약 정보(summary)가 있다면 사이드카 .md 파일 생성
-                if res_path in summary_map:
-                    summary = summary_map[res_path]
-                    s_type = summary.get("type", "DocumentSummary")
-                    s_title = summary.get("title", f"Summary: {filename}")
-                    s_desc = summary.get("description", "")
-                    s_tags = summary.get("tags", [])
-                    s_content = summary.get("content", "")
-                    
-                    s_tags_formatted = json.dumps(s_tags, ensure_ascii=False)
-                    
-                    sidecar_content = f"""---
-type: {s_type}
-source_path: "assets/{filename}"
-title: "{s_title}"
-description: "{s_desc}"
-tags: {s_tags_formatted}
-timestamp: "{now.isoformat()}"
----
-
-{s_content}
-"""
-                    sidecar_file_path = os.path.join(assets_dir, f"{filename}.md")
-                    storage.write_text(sidecar_file_path, sidecar_content)
-        
-        attachments_md = []
-        if copied_images:
-            attachments_md.append("### 첨부 이미지\n" + "\n".join(copied_images))
-        if copied_files:
-            attachments_md.append("### 첨부 파일 및 리소스\n" + "\n".join(copied_files))
-            
-        if attachments_md:
-            content = content + "\n\n" + "\n\n".join(attachments_md)
-            resource_info = f" (자원 {len(copied_images) + len(copied_files)}개 assets 복사 및 사이드카 {len(summary_map)}개 작성 완료)"
-    
-    # JSON 직렬화 시 한글 깨짐 방지
-    tags_formatted = json.dumps(tags, ensure_ascii=False)
-    
-    qa_content = f"""---
-type: QAJournal
-title: "{title}"
-description: "{description}"
-tags: {tags_formatted}
-timestamp: "{now.isoformat()}"
-source: "agent-commit"
----
-
-# {title}
-
-{content}
-"""
-    try:
-        storage.write_text(qa_file_path, qa_content)
-    except Exception as e:
-        return f"Q&A 저널 파일 작성 실패: {e}"
-
-    # 3. Topic Summary 합성 (선택 사항)
-    topic_info = ""
-    if topic_name:
-        topic_slug = slugify(topic_name)
-        topic_file_path = None
-        
-        # 3-1. topic_map.json 조회하여 기존 카테고리 경로가 있는지 확인
-        topic_map_path = os.path.join(".agents", "topic_map.json")
-        if storage.exists(topic_map_path):
-            try:
-                content = storage.read_text(topic_map_path)
-                topic_map = json.loads(content)
-                for cat, files in topic_map.items():
-                    for f_rel in files:
-                        if os.path.basename(f_rel) == f"{topic_slug}.md":
-                            topic_file_path = f_rel
-                            break
-                    if topic_file_path:
-                        break
-            except Exception:
-                pass
-                
-        # 3-2. 찾지 못했다면 물리/가상 스토리지 재귀 탐색을 통해 기존 파일 위치 추적
-        if not topic_file_path or not storage.exists(topic_file_path):
-            topic_files = storage.list_files("topics", "*.md")
-            for f_rel in topic_files:
-                if os.path.basename(f_rel) == f"{topic_slug}.md":
-                    topic_file_path = f_rel
-                    break
-                    
-        # 3-3. 둘 다 없으면 신규 생성용 루트 기본값 설정
-        if not topic_file_path:
-            topic_file_path = os.path.join("topics", f"{topic_slug}.md")
-            
-        storage.makedirs(os.path.dirname(topic_file_path))
-        
-        # 파일이 존재하면 누적 업데이트
-        if storage.exists(topic_file_path):
-            try:
-                old_content = storage.read_text(topic_file_path)
-                
-                # 기존 콘텐츠 하단에 업데이트 추가
-                synthesis_text = f"\n\n### 업데이트 ({date_str})\n{topic_update_text}"
-                new_content = old_content + synthesis_text
-                
-                # timestamp 메타데이터 필드 갱신
-                new_content = re.sub(
-                    r'timestamp:.*', 
-                    f'timestamp: "{now.isoformat()}"', 
-                    new_content
-                )
-                
-                storage.write_text(topic_file_path, new_content)
-                topic_info = f" 및 토픽 '{topic_slug}.md' 누적 합성"
-            except Exception as e:
-                return f"Q&A 저널은 작성되었으나 토픽 합성 중 실패: {e}"
-        else:
-            # 신규 토픽 생성
-            topic_content = f"""---
-type: TopicSummary
-title: "{topic_name}"
-description: "자동 생성된 토픽 정리본: {topic_name}"
-tags: {tags_formatted}
-timestamp: "{now.isoformat()}"
----
-
-# {topic_name}
-
-{topic_update_text or '내용을 입력하세요.'}
-"""
-            try:
-                storage.write_text(topic_file_path, topic_content)
-                topic_info = f" 및 신규 토픽 '{topic_slug}.md' 생성"
-            except Exception as e:
-                return f"Q&A 저널은 작성되었으나 토픽 생성 중 실패: {e}"
-
-    # WIKI_DIR 기준의 상대경로 획득
-    rel_qa_path = qa_file_path
-    return (
-        f"성공: 지식이 마크다운 파일로 영속화되었습니다.\n"
-        f"- Q&A 저널: {rel_qa_path}{topic_info}{resource_info}\n\n"
-        f"*주의: 사용자의 로컬 검토 완료 전입니다. AI 지식으로 최신화하려면 '인덱싱해줘'라고 요청하시거나 run_wiki_indexing 스킬을 호출해 주세요."
-    )
-
-def run_wiki_indexing() -> str:
-    """
-    로컬 마크다운 파일들을 스캔하여 최신 지식을 데이터베이스에 증분 인덱싱(임베딩)합니다.
-    """
-    from src.core.database.factory import DatabaseManager
-    from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
-    from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
-    from src.indexing.application.service import WikiIndexer
-
-    root_dir = WIKI_DIR
     try:
         if EMBEDDING_PROVIDER == "openai":
             embedding_service = OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
@@ -362,15 +44,139 @@ def run_wiki_indexing() -> str:
         else:
             embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
             
-        db_manager = DatabaseManager()
-        indexer = WikiIndexer(root_dir=root_dir, db_manager=db_manager, embedding_service=embedding_service)
-        stats = indexer.run_indexing()
-        db_manager.close()
+        searcher = WikiSearcher(db_manager=db_manager, embedding_service=embedding_service)
+        results = searcher.search(query, limit=limit)
         
-        return f"성공: 데이터베이스 증분 인덱싱이 성공적으로 실행되었습니다.\n인덱싱 통계: {stats}"
+        if not results:
+            log_audit("KNOWLEDGE_RETRIEVAL", "SUCCESS", user_id=user_id, payload={"query": query, "results_found": 0})
+            return "지식베이스에서 관련된 문서를 찾지 못했습니다."
+            
+        file_paths = [doc["file_path"] for doc in results]
+        formatted_result = format_retrieved_documents(results)
+            
+        # 검색 감사 로그 성공 기록
+        log_audit(
+            action="KNOWLEDGE_RETRIEVAL",
+            status="SUCCESS",
+            user_id=user_id,
+            payload={"query": query, "limit": limit, "citations": file_paths}
+        )
+        return formatted_result
+    except DatabaseException as de:
+        log_audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id, payload={"query": query, "error": str(de)})
+        raise
     except Exception as e:
-        return f"데이터베이스 인덱싱 수행 중 에러 발생: {e}"
+        log_audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id, payload={"query": query, "error": str(e)})
+        raise WikiBaseException(f"지식베이스 탐색 수행 중 에러 발생: {e}") from e
+    finally:
+        db_manager.close()
 
+
+@tool_wrapper
+def commit_wiki_knowledge(
+    title: str, 
+    description: str, 
+    tags: List[str], 
+    content: str, 
+    topic_name: str = None, 
+    topic_update_text: str = None, 
+    image_paths: List[str] = None, 
+    resource_paths: List[str] = None, 
+    resource_summaries: List[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    새로운 지식을 qa/ 저널 마크다운 문서로 영속화하고, 선택적으로 주제별 토픽(topics/) 문서를 누적 업데이트합니다.
+    """
+    if not title:
+        raise InvalidArgumentException("지식 제목(title)은 필수 입력 항목입니다.")
+    if not content:
+        raise InvalidArgumentException("지식 본문(content)은 필수 입력 항목입니다.")
+
+    user_config = current_user_config.get() or {}
+    user_id = user_config.get("api_key", "SYSTEM")
+
+    try:
+        manager = WikiIntegrationManager()
+        result = manager.commit_knowledge(
+            title=title,
+            description=description,
+            tags=tags,
+            content=content,
+            topic_name=topic_name,
+            topic_update_text=topic_update_text,
+            image_paths=image_paths,
+            resource_paths=resource_paths,
+            resource_summaries=resource_summaries
+        )
+        
+        # 지식 저널 생성 및 합성 성공 감사 로그 기록
+        log_audit(
+            action="KNOWLEDGE_COMMIT",
+            status="SUCCESS",
+            user_id=user_id,
+            payload={
+                "title": title,
+                "qa_path": result["qa_file_path"],
+                "topic_name": topic_name,
+                "topic_path": result["topic_file_path"],
+                "resources_count": len(result["all_resources"])
+            }
+        )
+        
+        return {
+            "qa_file_path": result["qa_file_path"],
+            "topic_file_path": result["topic_file_path"],
+            "details": result["details"]
+        }
+    except Exception as e:
+        log_audit("KNOWLEDGE_COMMIT", "FAILED", user_id=user_id, payload={"title": title, "error": str(e)})
+        raise
+
+
+@tool_wrapper
+def run_wiki_indexing() -> Dict[str, Any]:
+    """
+    로컬 마크다운 파일들의 변경 사항을 감지하여 데이터베이스에 실시간으로 증분 인덱싱(임베딩)합니다.
+    """
+    from src.indexing.application.service import WikiIndexer
+
+    user_config = current_user_config.get() or {}
+    user_id = user_config.get("api_key", "SYSTEM")
+
+    try:
+        db_manager = DatabaseManager()
+        db_manager.connect()
+    except Exception as e:
+        log_audit("VECTOR_INDEXING_RUN", "FAILED", user_id=user_id, payload={"error": f"DB 연결 실패: {e}"})
+        raise DatabaseException(f"인덱싱 데이터베이스 연결 실패: {e}") from e
+        
+    try:
+        if EMBEDDING_PROVIDER == "openai":
+            embedding_service = OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
+        elif EMBEDDING_PROVIDER == "bge-m3":
+            embedding_service = BGEM3EmbeddingService()
+        else:
+            embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
+            
+        indexer = WikiIndexer(root_dir=WIKI_DIR, db_manager=db_manager, embedding_service=embedding_service)
+        stats = indexer.run_indexing()
+        
+        # 인덱싱 완료 감사 로그 성공 기록
+        log_audit(
+            action="VECTOR_INDEXING_RUN",
+            status="SUCCESS",
+            user_id=user_id,
+            payload={"stats": stats}
+        )
+        return stats
+    except Exception as e:
+        log_audit("VECTOR_INDEXING_RUN", "FAILED", user_id=user_id, payload={"error": str(e)})
+        raise WikiBaseException(f"인덱싱 수행 중 치명적 에러 발생: {e}") from e
+    finally:
+        db_manager.close()
+
+
+@tool_wrapper
 def check_knowledge_drift() -> str:
     """
     스케줄 관리 디렉토리(.agents/schedules/)를 분석하여 갱신 주기가 도달한 노트들의 목록을 리턴합니다.
@@ -383,8 +189,10 @@ def check_knowledge_drift() -> str:
             return "CHECK_RESULT: NO_EXPIRED_TARGETS"
         return json.dumps(targets, ensure_ascii=False, indent=2)
     except Exception as e:
-        return f"Error scanning expired schedules: {e}"
+        raise WikiBaseException(f"Error scanning expired schedules: {e}") from e
 
+
+@tool_wrapper
 def evaluate_knowledge_drift(file_path: str, latest_text: str) -> str:
     """
     특정 노트의 로컬 텍스트와 새로 수집된 최신 정보를 LLM을 통해 비교하여 갱신 괴리가 있는지 판독합니다.
@@ -395,8 +203,10 @@ def evaluate_knowledge_drift(file_path: str, latest_text: str) -> str:
         res = refresher.evaluate_drift(rel_path=file_path, latest_text=latest_text)
         return json.dumps(res, ensure_ascii=False, indent=2)
     except Exception as e:
-        return f"Error evaluating knowledge drift: {e}"
+        raise WikiBaseException(f"Error evaluating knowledge drift: {e}") from e
 
+
+@tool_wrapper
 def apply_knowledge_merge(file_path: str) -> str:
     """
     사용자의 승인을 얻은 경우, scratch/에 생성된 임시 갱신안을 원본 지식 마크다운에 병합합니다.
@@ -406,8 +216,10 @@ def apply_knowledge_merge(file_path: str) -> str:
     try:
         return refresher.apply_merge(rel_path=file_path)
     except Exception as e:
-        return f"Error merging knowledge drift: {e}"
+        raise WikiBaseException(f"Error merging knowledge drift: {e}") from e
 
+
+@tool_wrapper
 def update_knowledge_schedule(file_path: str, interval: str, source: str, category: str = "programming") -> str:
     """
     대화를 통해 특정 마크다운 노트의 갱신 주기(refresh_interval) 및 수집 소스(refresh_source)를 변경합니다.
@@ -418,4 +230,4 @@ def update_knowledge_schedule(file_path: str, interval: str, source: str, catego
         refresher.update_or_create_schedule(rel_path=file_path, interval=interval, source=source, category=category)
         return f"성공: {file_path} 노정의 갱신 주기를 {interval}(소출처: {source}, 범주: {category})으로 변경 완료했습니다."
     except Exception as e:
-        return f"Error updating knowledge schedule: {e}"
+        raise WikiBaseException(f"Error updating knowledge schedule: {e}") from e

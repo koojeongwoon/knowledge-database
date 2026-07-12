@@ -1,9 +1,8 @@
-import os
 import hashlib
+import os
 import random
 from abc import ABC, abstractmethod
 from typing import List, Optional
-
 
 
 class BaseEmbeddingService(ABC):

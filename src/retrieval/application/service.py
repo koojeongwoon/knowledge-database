@@ -141,6 +141,10 @@ class WikiSearcher:
             if len(retrieved_docs) >= limit:
                 break
 
+        # 인용수 업데이트 (기존 agent_tool에 있던 비즈니스 로직을 이관)
+        if file_paths:
+            self.repository.increment_citation_count(file_paths)
+
         # 7. Graph-link RAG: 매칭된 문서들과 위키링크로 1촌 연결된 연관 개념 확장
         try:
             connected_docs = self.repository.get_connected_documents(file_paths, limit=3)

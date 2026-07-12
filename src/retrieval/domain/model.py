@@ -1,5 +1,5 @@
-from typing import List, Dict, Any, Tuple
 from collections import defaultdict
+from typing import List, Dict, Any, Tuple
 
 
 class Query:
