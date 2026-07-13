@@ -6,3 +6,25 @@ metadata:
 data:
   POSTGRES_DB: knowledge_db
   POSTGRES_USER: postgres
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-config
+  namespace: llm-wiki
+data:
+  DB_TYPE: "postgres"
+  DB_HOST: "postgres-service.infra.svc.cluster.local"
+  DB_PORT: "5432"
+  DB_NAME: "knowledge_db"
+  DB_USER: "knowledge_user"
+  REDIS_WIKI_HOST: "redis-wiki-cache-service.infra.svc.cluster.local"
+  REDIS_WIKI_PORT: "6379"
+  EMBEDDING_PROVIDER: "openai"
+  EMBEDDING_DIM: "1536"
+  STORAGE_TYPE: "s3"
+  WIKI_DIR: "/app/wiki"
+  AUTH_SERVER_URL: "https://auth.snappytory.com"
+  RERANKER_ENABLED: "true"
+  RERANKER_MODEL: "BAAI/bge-reranker-v2-m3"
+  DOCUMENT_EXPANSION_ENABLED: "true"

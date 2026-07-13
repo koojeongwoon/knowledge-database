@@ -48,7 +48,10 @@ SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.35"))
 
 # Cross-Encoder 리랭커 설정 (비활성 시 RRF 결과를 그대로 사용)
 RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "false").lower() == "true"
-RERANKER_MODEL = os.getenv("RERANKER_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+
+# 문서 확장 (Document Expansion) 설정 (인덱싱 시 예상 질문/키워드 자동 추출 임베딩)
+DOCUMENT_EXPANSION_ENABLED = os.getenv("DOCUMENT_EXPANSION_ENABLED", "false").lower() == "true"
 
 import contextvars
 current_user_config = contextvars.ContextVar("current_user_config", default={})

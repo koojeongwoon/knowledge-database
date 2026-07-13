@@ -23,6 +23,49 @@ class WikiIndexer:
         self.embedding_service = embedding_service
         self.target_dirs = ["qa", "topics", "assets", "attachments"]
         self.storage = StorageManager()
+        
+        # 문서 확장(Document Expansion)을 위한 OpenAI 클라이언트 초기화
+        self.openai_client = None
+        from src.core.config import DOCUMENT_EXPANSION_ENABLED
+        if DOCUMENT_EXPANSION_ENABLED:
+            try:
+                from openai import OpenAI
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    from src.core.config import current_user_config
+                    api_key = (current_user_config.get() or {}).get("openai_api_key")
+                if api_key:
+                    self.openai_client = OpenAI(api_key=api_key)
+            except Exception as e:
+                print(f"Warning: Failed to initialize OpenAI client for document expansion: {e}")
+
+    def _generate_expansion_text(self, title: str, description: str, content: str) -> str:
+        """
+        LLM(gpt-4o-mini)을 호출하여 청크와 관련된 예상 질문 3개와 연관 키워드 5개를 생성합니다.
+        """
+        if not self.openai_client:
+            return ""
+        try:
+            prompt = (
+                "You are an AI assistant optimizing search indexes for a technical knowledge base.\n"
+                "Analyze the given text snippet and generate:\n"
+                "1. Three natural user questions (in Korean) that this text snippet directly answers.\n"
+                "2. Five key search keywords/terms/synonyms/translations (both in Korean and English) relevant to this text.\n"
+                "Keep the output extremely concise and return it as a plain list of questions and keywords.\n\n"
+                f"Title: {title}\n"
+                f"Description: {description}\n"
+                f"Content:\n{content}\n"
+            )
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=250,
+                temperature=0.3
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Warning: Failed to generate document expansion text: {e}")
+            return ""
 
     def _get_local_files(self) -> List[str]:
         """
@@ -117,7 +160,15 @@ class WikiIndexer:
                     raw_frontmatter=fm,
                     content_hash=content_hash
                 )
-                embedding_texts.append(chunk.to_embedding_text())
+                # 문서 확장(Document Expansion) 수행
+                emb_text = chunk.to_embedding_text()
+                from src.core.config import DOCUMENT_EXPANSION_ENABLED
+                if DOCUMENT_EXPANSION_ENABLED and self.openai_client:
+                    expansion_txt = self._generate_expansion_text(chunk_title, description, child_txt)
+                    if expansion_txt:
+                        emb_text = f"{emb_text}\n\n[Expected Questions & Keywords]\n{expansion_txt}"
+                
+                embedding_texts.append(emb_text)
                 pending_chunks.append(chunk)
                 chunk_index += 1
 

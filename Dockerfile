@@ -20,6 +20,8 @@ RUN mkdir src && touch src/__init__.py && \
 COPY src/ ./src/
 RUN pip install --no-cache-dir --no-deps .
 
+# 리랭커 모델 빌드 타임 사전 캐싱 (Cold Start 방지)
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-v2-m3')"
 
 # 지식 마크다운 문서들이 마운트될 디렉토리 생성
 RUN mkdir -p /app/wiki
