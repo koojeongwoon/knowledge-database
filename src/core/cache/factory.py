@@ -11,4 +11,5 @@ def CacheManager() -> BaseCacheManager:
     """
     host = os.getenv("REDIS_WIKI_HOST", "redis-wiki-cache-service.infra.svc.cluster.local")
     port = int(os.getenv("REDIS_WIKI_PORT", 6379))
-    return RedisCacheManager(host=host, port=port)
+    password = os.getenv("REDIS_WIKI_PASSWORD")
+    return RedisCacheManager(host=host, port=port, password=password)

@@ -8,10 +8,11 @@ logger = logging.getLogger("cache_manager")
 
 class RedisCacheManager(BaseCacheManager):
     """RedisTemplate 구조를 구현한 Redis 구체 캐시 매니저 (예외 은닉 래핑)"""
-    def __init__(self, host: str, port: int):
+    def __init__(self, host: str, port: int, password: Optional[str] = None):
         self.client = redis.Redis(
             host=host,
             port=port,
+            password=password,
             db=0,
             decode_responses=True,
             socket_timeout=1.0  # 연결 장애 시 지연을 방지하기 위한 타임아웃 제한
