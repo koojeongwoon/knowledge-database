@@ -1,5 +1,5 @@
 from src.indexing.domain.repository import BaseIndexingRepository
-from src.indexing.infrastructure.postgres import PostgresIndexingRepository
+from src.indexing.infrastructure.indexing_repository import PostgresIndexingRepository
 
 def IndexingRepository(db_manager) -> BaseIndexingRepository:
     """

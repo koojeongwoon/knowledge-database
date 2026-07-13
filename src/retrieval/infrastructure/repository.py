@@ -1,5 +1,5 @@
 from src.retrieval.domain.repository import BaseRetrievalRepository
-from src.retrieval.infrastructure.postgres import PostgresRetrievalRepository
+from src.retrieval.infrastructure.retrieval_repository import PostgresRetrievalRepository
 
 def RetrievalRepository(db_manager) -> BaseRetrievalRepository:
     """

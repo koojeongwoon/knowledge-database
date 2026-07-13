@@ -185,3 +185,16 @@ uv pip install -e .
   ```json
   {"timestamp": "2026-07-13T00:25:05Z", "level": "AUDIT", "user_id": "mcp_live_138b76...", "action": "KNOWLEDGE_RETRIEVAL", "status": "SUCCESS", "payload": {"query": "Kubernetes Layout", "limit": 5, "citations": ["qa/2026-07-12/1430-k8s.md"]}}
   ```
+
+---
+
+## 6. 에이전트 연동 및 자동 지식화 규칙 (Agent Integration)
+
+본 저장소는 개발자뿐만 아니라 AI 코딩 에이전트(Antigravity 등)가 유기적으로 지식을 습득하고 활용할 수 있도록 [.agents/AGENTS.md](file:///Users/jw/__dev/knowledge/.agents/AGENTS.md) 규칙을 제공합니다. 에이전트를 사용하는 다른 팀원들도 동일한 고성능 워크플로우를 보장받을 수 있도록 아래 규칙을 에이전트에 세팅해 주십시오.
+
+### 1) 에이전트 행동 지침 (Core Rules)
+* **지식 RAG 우선 검색**: 사용자의 모든 질문과 요청에 대해 답변을 생성하기 전에 무조건 1회 `search_wiki_knowledge` 도구를 먼저 호출하여 관련 컨텍스트가 있는지 파악해야 합니다.
+* **비동기 백그라운드 지식화 및 인덱싱**: 지식을 새로 작성하거나 데이터베이스 인덱스를 갱신할 때 사용자의 대기 시간을 줄이기 위해 **비동기 백그라운드(서브에이전트)로 처리**합니다.
+  * 본체 에이전트는 사용자에게 "지식화 및 인덱싱을 백그라운드에서 진행하겠습니다"라는 안내 메시지를 즉시 보낸 뒤 바로 턴을 종료합니다.
+  * 이후 백그라운드에서 실행되는 서브에이전트가 `commit_new_knowledge` 및 `run_database_indexing` 도구를 호출하여 저장소 기록 및 인덱스 갱신 작업을 완료합니다.
+* **세션 아티팩트 이관**: 대화 중 설계서, 보고서 등의 아티팩트가 생성된 경우, 사용자에게 위키에 함께 링크할지 동의를 구한 뒤 `commit_new_knowledge` 도구의 `resource_paths`에 추가하여 R2 스토리지로 이관합니다.

@@ -13,18 +13,20 @@ def build_journal_markdown(
     description: str, 
     tags: List[str], 
     content: str, 
-    timestamp: datetime.datetime
+    timestamp: datetime.datetime,
+    visibility: str = "public"
 ) -> str:
     """QAJournal 마크다운 파일의 전체 콘텐츠 구조를 조립합니다."""
     import json
     tags_formatted = json.dumps(tags, ensure_ascii=False)
+    visibility_line = f'\nvisibility: "{visibility}"' if visibility == "private" else ""
     return f"""---
 type: QAJournal
 title: "{title}"
 description: "{description}"
 tags: {tags_formatted}
 timestamp: "{timestamp.isoformat()}"
-source: "agent-commit"
+source: "agent-commit"{visibility_line}
 ---
 
 # {title}

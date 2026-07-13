@@ -27,19 +27,24 @@ def commit_new_knowledge(
     tags: List[str], 
     content: str, 
     topic_name: Optional[str] = None, 
-    topic_update_text: Optional[str] = None
+    topic_update_text: Optional[str] = None,
+    visibility: Optional[str] = "private"
 ) -> str:
     """
     새롭게 습득하거나 정리된 지식을 로컬 QA 저널(qa/)에 파일로 기록하고,
     선택적으로 기존 공통 개념 토픽(topics/) 문서에 누적 합성합니다.
     """
-    return commit_wiki_knowledge(
-        title=title,
-        description=description,
-        tags=tags,
-        content=content,
-        topic_name=topic_name,
-        topic_update_text=topic_update_text
+    return cast(
+        str,
+        commit_wiki_knowledge(
+            title=title,
+            description=description,
+            tags=tags,
+            content=content,
+            topic_name=topic_name,
+            topic_update_text=topic_update_text,
+            visibility=visibility
+        )
     )
 
 @mcp.tool(name="run_database_indexing")

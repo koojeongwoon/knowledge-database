@@ -21,6 +21,8 @@ DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME", "knowledge_db")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+DB_MIN_CONNECTIONS = int(os.getenv("DB_MIN_CONNECTIONS", "2"))
+DB_MAX_CONNECTIONS = int(os.getenv("DB_MAX_CONNECTIONS", "20"))
 
 # 임베딩 공급자 설정 (fake, openai, bge-m3)
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "fake").lower()

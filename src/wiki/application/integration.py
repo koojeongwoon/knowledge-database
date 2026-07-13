@@ -32,7 +32,8 @@ class WikiIntegrationManager:
         topic_update_text: str = None,
         image_paths: List[str] = None,
         resource_paths: List[str] = None,
-        resource_summaries: List[Dict[str, Any]] = None
+        resource_summaries: List[Dict[str, Any]] = None,
+        visibility: str = "public"
     ) -> Dict[str, Any]:
         now = datetime.datetime.now(datetime.timezone.utc)
         date_str = now.strftime("%Y-%m-%d")
@@ -107,7 +108,7 @@ class WikiIntegrationManager:
                 raise StorageOperationException(f"첨부 자원 복사 처리 중 오류 발생: {e}") from e
 
         # 3. Journal 파일 쓰기
-        qa_content = build_journal_markdown(title, description, tags, content, now)
+        qa_content = build_journal_markdown(title, description, tags, content, now, visibility)
         try:
             self.storage.write_text(qa_file_path, qa_content)
         except Exception as e:

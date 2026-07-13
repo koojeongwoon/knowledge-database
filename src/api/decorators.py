@@ -3,16 +3,26 @@ import json
 import logging
 import os
 import traceback
+import sys
+from typing import Callable, TypeVar, Any
+
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec
+else:
+    from typing_extensions import ParamSpec
 
 from src.api.dto import ToolResponse
 from src.api.exceptions import WikiBaseException
 
 logger = logging.getLogger("knowledge_base")
 
-def tool_wrapper(func):
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def tool_wrapper(func: Callable[P, R]) -> Callable[P, str]:
     """지식베이스 도구 실행 결과를 일관된 ToolResponse JSON String 규격으로 변환하는 통합 데코레이터"""
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> str:
         try:
             result = func(*args, **kwargs)
             if isinstance(result, ToolResponse):

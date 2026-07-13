@@ -5,7 +5,8 @@ description = "Obsidian + Agent based LLM-Wiki Knowledge Base"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "psycopg2-binary>=2.9.9",
+    "psycopg[binary]>=3.1.18",
+    "psycopg-pool>=3.2.1",
     "pgvector>=0.2.5",
     "pyyaml>=6.0.1",
     "python-dotenv>=1.0.1",

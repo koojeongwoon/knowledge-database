@@ -82,7 +82,8 @@ def commit_wiki_knowledge(
     topic_update_text: str = None, 
     image_paths: List[str] = None, 
     resource_paths: List[str] = None, 
-    resource_summaries: List[Dict[str, Any]] = None
+    resource_summaries: List[Dict[str, Any]] = None,
+    visibility: str = "private"
 ) -> Dict[str, Any]:
     """
     새로운 지식을 qa/ 저널 마크다운 문서로 영속화하고, 선택적으로 주제별 토픽(topics/) 문서를 누적 업데이트합니다.
@@ -106,7 +107,8 @@ def commit_wiki_knowledge(
             topic_update_text=topic_update_text,
             image_paths=image_paths,
             resource_paths=resource_paths,
-            resource_summaries=resource_summaries
+            resource_summaries=resource_summaries,
+            visibility=visibility
         )
         
         # 지식 저널 생성 및 합성 성공 감사 로그 기록

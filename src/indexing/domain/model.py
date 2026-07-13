@@ -87,6 +87,9 @@ class Chunk:
 
     def to_dict(self) -> Dict[str, Any]:
         """딕셔너리 직렬화 변환"""
+        visibility = self.raw_frontmatter.get("visibility", "public") if isinstance(self.raw_frontmatter, dict) else "public"
+        if visibility not in ("public", "private"):
+            visibility = "public"
         return {
             "file_path": self.file_path,
             "chunk_index": self.chunk_index,
@@ -98,4 +101,5 @@ class Chunk:
             "parent_content": self.parent_content,
             "raw_frontmatter": self.raw_frontmatter,
             "content_hash": self.content_hash,
+            "visibility": visibility
         }

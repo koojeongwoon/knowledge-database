@@ -14,14 +14,19 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot / (norm_v1 * norm_v2)
 
+
 class PostgresRetrievalRepository(BaseRetrievalRepository):
     """PostgreSQL 데이터베이스(pgvector 활용)를 타겟으로 지식 검색 및 RAG 문서를 조회하는 구체 인프라 구현체"""
     def __init__(self, db_manager):
         self.db_manager = db_manager
 
+    def _get_owner_id(self) -> str:
+        from src.core.config import current_user_config
+        config = current_user_config.get() or {}
+        return config.get("api_key", "SYSTEM")
+
     def keyword_search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        self.db_manager.connect()
-        conn = self.db_manager.conn
+        owner_id = self._get_owner_id()
 
         words = re.findall(r'\w+', query, re.UNICODE)
         words = [w for w in words if len(w) > 1]
@@ -31,53 +36,50 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
 
         tsquery_str = " | ".join(words)
 
-        with conn.cursor() as cur:
-            try:
-                sql = """
-                SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
-                       d.content, d.parent_content, d.raw_frontmatter,
-                       COALESCE(c.citation_count, 0) AS citation_count,
-                       ts_rank(
-                           to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')),
-                           to_tsquery('simple', %s)
-                       ) AS rank
-                FROM knowledge_documents d
-                LEFT JOIN knowledge_citations c ON d.file_path = c.file_path
-                WHERE to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, ''))
-                      @@ to_tsquery('simple', %s)
-                ORDER BY rank DESC
-                LIMIT %s;
-                """
-                cur.execute(sql, (tsquery_str, tsquery_str, limit))
-                columns = [col[0] for col in cur.description]
-                results = []
-                for row in cur.fetchall():
-                    doc = dict(zip(columns, row))
-                    if isinstance(doc.get("raw_frontmatter"), str):
-                        doc["raw_frontmatter"] = json.loads(doc["raw_frontmatter"])
-                    results.append(doc)
-                return results
-            except Exception as e:
-                print(f"Warning: Keyword search failed ({e}). Falling back to empty results.")
-                return []
+        with self.db_manager.cursor() as cur:
+            sql = """
+            SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
+                   d.content, d.parent_content, d.raw_frontmatter,
+                   COALESCE(c.citation_count, 0) AS citation_count,
+                   ts_rank(
+                       to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')),
+                       to_tsquery('simple', %s)
+                   ) AS rank
+            FROM knowledge_documents d
+            LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
+            WHERE to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')) @@ to_tsquery('simple', %s)
+                  AND ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
+            ORDER BY rank DESC
+            LIMIT %s;
+            """
+            cur.execute(sql, (tsquery_str, tsquery_str, owner_id, limit))
+            columns = [col[0] for col in cur.description]
+            results = []
+            for row in cur.fetchall():
+                doc = dict(zip(columns, row))
+                if isinstance(doc.get("raw_frontmatter"), str):
+                    doc["raw_frontmatter"] = json.loads(doc["raw_frontmatter"])
+                results.append(doc)
+              
+            return results
 
     def similarity_search(self, query_embedding: List[float], limit: int = 5) -> List[Dict[str, Any]]:
-        self.db_manager.connect()
-        conn = self.db_manager.conn
+        owner_id = self._get_owner_id()
         embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
         
-        with conn.cursor() as cur:
+        with self.db_manager.cursor() as cur:
             query = """
             SELECT 
                 d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags, d.content, d.parent_content, d.raw_frontmatter,
                 (1 - (d.embedding <=> %s)) AS similarity,
                 COALESCE(c.citation_count, 0) AS citation_count
             FROM knowledge_documents d
-            LEFT JOIN knowledge_citations c ON d.file_path = c.file_path
+            LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
+            WHERE ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
             ORDER BY d.embedding <=> %s ASC
             LIMIT %s;
             """
-            cur.execute(query, (embedding_str, embedding_str, limit))
+            cur.execute(query, (embedding_str, owner_id, embedding_str, limit))
             columns = [col[0] for col in cur.description]
             results = []
             for row in cur.fetchall():
@@ -91,18 +93,17 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         if not file_paths:
             return []
             
-        self.db_manager.connect()
-        conn = self.db_manager.conn
-        with conn.cursor() as cur:
+        owner_id = self._get_owner_id()
+        with self.db_manager.cursor() as cur:
             query_edges = """
             SELECT target_topic, MAX(weight) as weight
             FROM knowledge_edges 
-            WHERE source_path = ANY(%s)
+            WHERE source_path = ANY(%s) AND owner_id = %s
             GROUP BY target_topic
             ORDER BY weight DESC
             LIMIT %s;
             """
-            cur.execute(query_edges, (file_paths, limit))
+            cur.execute(query_edges, (file_paths, owner_id, limit))
             edges_rows = cur.fetchall()
             
             if not edges_rows:
@@ -114,12 +115,12 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
             query_docs = """
             SELECT file_path, doc_type, title, description, tags, content, parent_content
             FROM knowledge_documents
-            WHERE chunk_index = 0 AND (
+            WHERE chunk_index = 0 AND owner_id = %s AND (
                 LOWER(title) = ANY(%s) OR
                 SPLIT_PART(SPLIT_PART(file_path, '/', 2), '.', 1) = ANY(%s)
             );
             """
-            cur.execute(query_docs, (topics_lower, topics_lower))
+            cur.execute(query_docs, (owner_id, topics_lower, topics_lower))
             
             columns = [col[0] for col in cur.description]
             results = []
@@ -144,26 +145,18 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
             return
             
         import datetime
-        from src.api.exceptions import DatabaseException
         
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        self.db_manager.connect()
-        conn = self.db_manager.conn
+        owner_id = self._get_owner_id()
         
-        original_autocommit = conn.autocommit
-        conn.autocommit = False
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    for path in file_paths:
-                        cur.execute("""
-                            INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at)
-                            VALUES (%s, 1, %s)
-                            ON CONFLICT (file_path) DO UPDATE SET
-                                citation_count = knowledge_citations.citation_count + 1,
-                                last_cited_at = EXCLUDED.last_cited_at;
-                        """, (path, now))
-        except Exception as e:
-            raise DatabaseException(f"데이터베이스 인용수 업데이트 트랜잭션 실패: {e}") from e
-        finally:
-            conn.autocommit = original_autocommit
+        query = """
+            INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at, owner_id)
+            VALUES %s
+            ON CONFLICT (owner_id, file_path) DO UPDATE SET
+                citation_count = knowledge_citations.citation_count + 1,
+                last_cited_at = EXCLUDED.last_cited_at;
+        """
+        values = [(path, 1, now, owner_id) for path in file_paths]
+        template = "(%s, %s, %s, %s)"
+        
+        self.db_manager.execute_batch(query, values, template=template)

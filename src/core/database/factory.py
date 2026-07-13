@@ -1,4 +1,4 @@
-from src.core.database.postgres import PostgresDatabaseManager
+from src.core.database.connection import PostgresDatabaseManager
 
 def DatabaseManager():
     """
