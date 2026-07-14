@@ -1,6 +1,7 @@
 import os
 import sys
-from typing import List, Optional
+from typing import List, Optional, cast
+
 
 # 프로젝트 루트 디렉토리를 Python Path에 추가하여 절대 import 호환성 확보
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))

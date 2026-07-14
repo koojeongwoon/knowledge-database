@@ -98,6 +98,8 @@ class PostgresDatabaseManager(BaseDatabaseManager):
             from src.api.exceptions import DatabaseException
             logger.error(f"Database query failed: {e}")
             raise DatabaseException(f"Database query failed: {e}") from e
+        finally:
+            self.close()
 
     def execute_batch(self, query: str, values: list, template: str = None, page_size: int = 50):
         self.connect()
@@ -119,6 +121,8 @@ class PostgresDatabaseManager(BaseDatabaseManager):
         except Exception as e:
             logger.error(f"Database batch execution failed: {e}")
             raise DatabaseException(f"Database batch execution failed: {e}") from e
+        finally:
+            self.close()
 
     def rollback(self):
         if self.conn and not self.conn.closed:

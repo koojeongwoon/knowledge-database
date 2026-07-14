@@ -25,6 +25,6 @@ data:
   STORAGE_TYPE: "s3"
   WIKI_DIR: "/app/wiki"
   AUTH_SERVER_URL: "https://auth.snappytory.com"
-  RERANKER_ENABLED: "true"
+  RERANKER_ENABLED: "false"
   RERANKER_MODEL: "BAAI/bge-reranker-v2-m3"
   DOCUMENT_EXPANSION_ENABLED: "true"

@@ -20,7 +20,7 @@ RUN mkdir src && touch src/__init__.py && \
 COPY src/ ./src/
 RUN pip install --no-cache-dir --no-deps .
 
-선# 리랭커 모델은 Persistent Volume(영속 볼륨)에 캐싱하여 컨테이너 이미지 크기를 줄입니다.
+# 리랭커 모델은 Persistent Volume(영속 볼륨)에 캐싱하여 컨테이너 이미지 크기를 줄입니다.
 # (k8s 배포 설정에서 HF_HOME 환경 변수를 볼륨 경로로 마운트하여 기동 시 자동 캐싱)
 
 # 지식 마크다운 문서들이 마운트될 디렉토리 생성
