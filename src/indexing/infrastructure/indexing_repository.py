@@ -99,6 +99,26 @@ class PostgresIndexingRepository(BaseIndexingRepository):
             );
             """
             cur.execute(create_audit_logs_query)
+
+            create_users_query = """
+            CREATE TABLE IF NOT EXISTS knowledge_users (
+                user_id VARCHAR(50) PRIMARY KEY,
+                sub_val VARCHAR(100) UNIQUE NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+            cur.execute(create_users_query)
+
+            create_api_keys_query = """
+            CREATE TABLE IF NOT EXISTS knowledge_api_keys (
+                api_key_hash VARCHAR(255) PRIMARY KEY,
+                user_id VARCHAR(50) NOT NULL REFERENCES knowledge_users(user_id) ON DELETE CASCADE,
+                key_name VARCHAR(100),
+                expires_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+            cur.execute(create_api_keys_query)
             
             # ── Migration Queries (자동 마이그레이션 기 주입) ──
             cur.execute("ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM';")

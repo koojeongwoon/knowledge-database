@@ -1,19 +1,18 @@
 import json
 import logging
 import os
+import hashlib
+import base64
+from datetime import datetime, timezone
 
 import httpx
 
-from src.core.cache.factory import CacheManager
+from src.core.cache.factory import WikiCacheManager
 from src.core.config import current_user_config
 from src.core.logging.audit import log_audit
 
-# 지식베이스(Wiki) 전용으로 새로 배포될 Redis 캐시 서비스 정보 연동 (infra 네임스페이스 타겟팅)
-REDIS_HOST = os.getenv("REDIS_WIKI_HOST", "redis-wiki-cache-service.infra.svc.cluster.local")
-REDIS_PORT = int(os.getenv("REDIS_WIKI_PORT", 6379))
-
-# 추상화된 공용 캐시 매니저 획득 (디펜던시 격리)
-cache_manager = CacheManager()
+# 추상화된 공용 캐시 매니저 획득 (Wiki Cache 인스턴스 연동)
+cache_manager = WikiCacheManager()
 
 logger = logging.getLogger("security_middleware")
 AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL")
@@ -34,43 +33,86 @@ async def _send_json_error(send, status: int, detail: str):
         "body": body,
     })
 
+def _hash_api_key(plain_key: str) -> str:
+    """평문 API Key를 SHA-256 해시 및 Base64 인코딩하여 인증서버의 keyHash 형식과 맞춥니다."""
+    hasher = hashlib.sha256()
+    hasher.update(plain_key.encode('utf-8'))
+    return base64.b64encode(hasher.digest()).decode('utf-8')
+
+def _validate_api_key_from_db(plain_key: str) -> dict:
+    """지식디비(knowledge_db)의 api_keys 테이블을 조회하여 키의 실존 여부 및 만료일을 검사합니다."""
+    key_hash = _hash_api_key(plain_key)
+    try:
+        from src.core.database.factory import DatabaseManager
+        with DatabaseManager().cursor() as cur:
+            cur.execute("""
+                SELECT user_id, expires_at 
+                FROM knowledge_api_keys 
+                WHERE api_key_hash = %s;
+            """, (key_hash,))
+            row = cur.fetchone()
+            
+            if row:
+                user_id, expires_at = row
+                # 만료일자가 없거나 현재 시간보다 뒤에 있어야 유효
+                if expires_at is None or expires_at > datetime.now(timezone.utc):
+                    return {
+                        "valid": True, 
+                        "api_key": plain_key, 
+                        "user_id": user_id,
+                        "expires_at": expires_at.isoformat() if expires_at else None
+                    }
+    except Exception as e:
+        logger.error(f"Failed to validate API Key in local DB: {e}")
+    return None
+
 async def _validate_api_key_cached(token: str) -> dict:
     """지식베이스 전용 Redis 인스턴스에 토큰 유효성 검증 결과를 캐싱합니다."""
-    cache_key = f"auth:token:{token}"
+    # 1. 보안성 향상을 위해 평문 API Key를 해싱한 값을 캐시 키로 일원화
+    key_hash = _hash_api_key(token)
+    cache_key = f"auth:token:hash:{key_hash}"
     
-    # 1. 추상화 레이어를 통해 캐시 조회 (하부 Redis 연동 에러는 내부에서 캡슐화 처리됨)
+    # 2. 추상화 레이어를 통해 캐시 조회 (컨슈머가 CREATED 이벤트 시점에 미리 밀어넣었거나 기 캐싱된 결과)
     cached_result = cache_manager.get(cache_key)
     if cached_result:
         try:
             result = json.loads(cached_result)
-            # 캐시 히트 성공 감사 로그 기록
-            log_audit("AUTHENTICATE_BY_CACHE", "SUCCESS", user_id=token)
+            
+            # 2.1 캐시 만료 시간 2중 체크 (이중 방어벽)
+            expires_at_str = result.get("expires_at")
+            if expires_at_str:
+                expires_dt = datetime.fromisoformat(expires_at_str)
+                if expires_dt <= datetime.now(timezone.utc):
+                    log_audit("AUTHENTICATE_EXPIRED", "FAILED", user_id=result.get("user_id", token))
+                    # 만료되었을 경우 캐시 즉시 제거
+                    cache_manager.delete(cache_key)
+                    return None
+                    
+            log_audit("AUTHENTICATE_BY_CACHE", "SUCCESS", user_id=result.get("user_id", token))
             return result
         except json.JSONDecodeError:
             pass
 
-    # 2. 캐시 미스 시 외부 인증 서버 호출
-    if not AUTH_SERVER_URL:
-        log_audit("AUTHENTICATE_BYPASS", "SUCCESS", user_id=token)
-        return {"valid": True, "api_key": token}
+    # 3. 캐시 미스 시 로컬 DB 조회
+    result = _validate_api_key_from_db(token)
+    if result:
+        # 3.1 남은 유효 시간을 계산하여 Redis TTL로 설정
+        expires_at_str = result.get("expires_at")
+        ttl = 86400  # 기본값 24시간
+        if expires_at_str:
+            expires_dt = datetime.fromisoformat(expires_at_str)
+            remaining_seconds = int((expires_dt - datetime.now(timezone.utc)).total_seconds())
+            if remaining_seconds <= 0:
+                log_audit("AUTHENTICATE_EXPIRED", "FAILED", user_id=result["user_id"])
+                return None
+            ttl = min(86400, remaining_seconds)
+            
+        # 인증 성공 시 캐시 매니저에 정밀 TTL로 보관 (폐기 시 즉각 Evict되므로 일관성 100% 보장)
+        cache_manager.set(cache_key, json.dumps(result), ttl=ttl)
+        log_audit("AUTHENTICATE_LOCAL_DB", "SUCCESS", user_id=result["user_id"])
+        return result
         
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.post(
-                f"{AUTH_SERVER_URL}/api/auth/validate-key",
-                json={"api_key": token}
-            )
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("valid"):
-                    # 3. 인증 성공 시 캐시 매니저에 5분(TTL 300초)간 보관
-                    cache_manager.set(cache_key, json.dumps(result), ttl=300)
-                    log_audit("AUTHENTICATE_BY_AUTH_SERVER", "SUCCESS", user_id=token)
-                    return result
-    except Exception as e:
-        logger.error(f"Authentication Server Connection Timeout/Error: {e}")
-        
-    log_audit("AUTHENTICATE", "FAILED", user_id=token, payload={"reason": "Invalid token or auth server offline"})
+    log_audit("AUTHENTICATE", "FAILED", user_id=token, payload={"reason": "Invalid or expired API Key"})
     return None
 
 def _extract_user_config(headers: dict) -> dict:
@@ -96,9 +138,9 @@ def _extract_user_config(headers: dict) -> dict:
 
 class MCPAuthMiddleware:
     """
-    HTTP/SSE 프로토콜을 통과하기 전에 요청을 사전 가로채는 순수 ASGI 미들웨어.
+    HTTP/SSE 프로토콜을 통과하기 전에 요청을 사전 가로채는 ASGI 미들웨어.
     역할:
-    1. Authorization 헤더 검증 (인메모리 캐시 TTL 검증 연동)
+    1. Authorization 헤더 검증 (로컬 DB 조회를 통환 완벽한 격리 무중단)
     2. 사용자별 설정을 ContextVar에 주입하여 멀티테넌트 지원
     3. X-Forwarded-Proto 헤더 기반 유연한 SSL 스킴 오프로딩
     """
@@ -119,6 +161,7 @@ class MCPAuthMiddleware:
         method = scope.get("method", "GET").upper()
 
         # ─── 인증 검증 (POST /mcp 실제 요청에 대해서만 수행) ───
+        validated_user_id = "SYSTEM"
         if AUTH_SERVER_URL and path in ("/mcp",) and method == "POST":
             auth_header = headers.get("authorization", "")
             if not auth_header.startswith("Bearer "):
@@ -130,6 +173,7 @@ class MCPAuthMiddleware:
             if result is None:
                 await _send_json_error(send, 401, "Unauthorized or invalid API Key")
                 return
+            validated_user_id = result.get("user_id", "SYSTEM")
 
         # ─── SSL Offloading (X-Forwarded-Proto에 따른 지능형 판단) ───
         forwarded_proto = headers.get("x-forwarded-proto", "http")
@@ -138,6 +182,8 @@ class MCPAuthMiddleware:
 
         # ─── 사용자 설정 ContextVar 주입 ───
         user_config = _extract_user_config(headers)
+        user_config["user_id"] = validated_user_id  # 동기화된 로컬 user_id 바인딩
+        
         token_val = current_user_config.set(user_config)
         try:
             await self.app(scope, receive, send)

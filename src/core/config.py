@@ -56,4 +56,18 @@ DOCUMENT_EXPANSION_ENABLED = os.getenv("DOCUMENT_EXPANSION_ENABLED", "false").lo
 import contextvars
 current_user_config = contextvars.ContextVar("current_user_config", default={})
 
+# ── Redis 설정 ────────────────────────────────────────────────────────
+# Redis Cache (세션 공유, 임시 캐싱) — allkeys-lru / AOF off
+REDIS_CACHE_HOST = os.getenv("REDIS_CACHE_HOST", "redis-cache-service.infra.svc.cluster.local")
+REDIS_CACHE_PORT = int(os.getenv("REDIS_CACHE_PORT", "6379"))
+REDIS_CACHE_PASSWORD = os.getenv("REDIS_CACHE_PASSWORD", "")
 
+# Redis Wiki Cache (지식베이스 전용 토큰 캐싱) — allkeys-lru / AOF off
+REDIS_WIKI_HOST = os.getenv("REDIS_WIKI_HOST", "redis-wiki-cache-service.infra.svc.cluster.local")
+REDIS_WIKI_PORT = int(os.getenv("REDIS_WIKI_PORT", "6379"))
+REDIS_WIKI_PASSWORD = os.getenv("REDIS_WIKI_PASSWORD", "")
+
+# Redis Stream (비동기 아웃박스 이벤트 큐) — noeviction / AOF on
+REDIS_STREAM_HOST = os.getenv("REDIS_STREAM_HOST", "redis-stream-service.infra.svc.cluster.local")
+REDIS_STREAM_PORT = int(os.getenv("REDIS_STREAM_PORT", "6380"))
+REDIS_STREAM_PASSWORD = os.getenv("REDIS_STREAM_PASSWORD", "")

@@ -62,6 +62,15 @@ mcp_http_app = mcp.streamable_http_app()
 # Streamable HTTP App에 순수 ASGI 미들웨어를 감싸서 최종 app 생성
 app = MCPAuthMiddleware(mcp_http_app)
 
+# Redis Stream 기반의 회원가입 비동기 이벤트 컨슈머 데몬 시작
+try:
+    from src.core.event.consumer import UserSignupEventConsumer
+    event_consumer = UserSignupEventConsumer()
+    event_consumer.start()
+except Exception as e:
+    import logging
+    logging.getLogger("mcp_server").error(f"Failed to start UserSignupEventConsumer: {e}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -20,6 +20,8 @@ data:
   DB_USER: "knowledge_user"
   REDIS_WIKI_HOST: "redis-wiki-cache-service.infra.svc.cluster.local"
   REDIS_WIKI_PORT: "6379"
+  REDIS_STREAM_HOST: "redis-stream-service.infra.svc.cluster.local"
+  REDIS_STREAM_PORT: "6379"
   EMBEDDING_PROVIDER: "openai"
   EMBEDDING_DIM: "1536"
   STORAGE_TYPE: "s3"
