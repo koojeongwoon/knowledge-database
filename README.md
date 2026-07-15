@@ -164,11 +164,7 @@ DB_PASSWORD=postgres
 
 # 임베딩 공급자: fake, openai, bge-m3
 EMBEDDING_PROVIDER=openai
-OPENAI_API_KEY=sk-proj-... # (텍스트 임베딩 생성 및 문서 확장 LLM 호출용)
 EMBEDDING_DIM=1536
-
-# 지식베이스(Obsidian Vault) 루트 경로
-WIKI_DIR=.
 
 # RAG 검색 파이프라인 설정
 RERANKER_ENABLED=true
@@ -190,6 +186,11 @@ uv pip install -e .
   ```bash
   python main.py index
   ```
+* **DB 큐의 도래한 실패 작업 재처리 (스케줄러/CronJob용)**:
+  ```bash
+  python main.py retry-indexing --limit 100
+  ```
+  운영자가 재시도 시각과 최대 횟수를 무시하고 강제 실행하려면 `--force`를 추가합니다.
 * **하이브리드 시맨틱 검색 (리랭킹 적용)**:
   ```bash
   python main.py search "쿠버네티스 레이아웃 깨질 때" --limit 2
@@ -197,7 +198,41 @@ uv pip install -e .
 
 ---
 
-## 6. MCP 서버 연동 구성 (Stateless & Local-First)
+## 6. MCP 서버 연동 구성 (사용자별 S3/R2)
+
+### 사용자 설정 페이지
+
+MCP 서버와 동일한 도메인의 `/settings`에서 사용자별 OpenAI 및 S3/R2 설정을 등록할 수 있습니다.
+비밀 값은 `SETTINGS_ENCRYPTION_KEY`로 암호화되어 PostgreSQL에 저장되며 조회 API에는 원문이 반환되지 않습니다.
+
+```text
+GET  /             서버 상태 및 엔드포인트 안내
+GET  /health       헬스체크
+GET  /settings     설정 페이지
+POST /mcp          MCP 통신
+```
+
+운영 배포 전 `mcp-secrets`에 충분히 긴 `settings-encryption-key`를 반드시 설정해야 합니다.
+설정을 등록한 이후 MCP 클라이언트에는 사용자 인증 API Key만 전달하면 됩니다.
+
+웹 콘솔은 `https://knowledge.lynply.com/settings`에서 로그인 세션을 확인합니다. 세션이 없으면
+인증 포털로 이동하고, 인증 포털은 로그인 성공 후 JWT를 URL fragment에 담아
+`https://knowledge.lynply.com/callback`으로 반환해야 합니다. 콜백 페이지는 JWT를 검증한 뒤
+Secure/HttpOnly/SameSite=Lax 쿠키로 교환하고 `/settings`로 이동합니다.
+
+```json
+{
+  "mcpServers": {
+    "llm-wiki": {
+      "type": "http",
+      "url": "https://mcp.lynply.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-auth-token"
+      }
+    }
+  }
+}
+```
 
 ### 1) 클라우드 원격 서버 배포 연동 (`mcp.json` 설정)
 클라우드(OCI 등)에 백엔드 서버를 띄워두고, 로컬 PC에서 HTTPS Streamable HTTP 프로토콜로 직접 연동하는 표준 설정입니다.
@@ -209,46 +244,20 @@ uv pip install -e .
       "type": "http",
       "url": "https://mcp.lynply.com/mcp",
       "headers": {
-        "Authorization": "Bearer your-auth-token",
-        "X-OpenAI-API-Key": "sk-proj-your-openai-api-key",
-        "X-Storage-Type": "s3",
-        "X-S3-Endpoint-URL": "https://<account-id>.r2.cloudflarestorage.com",
-        "X-S3-Access-Key-ID": "your-r2-access-key-id",
-        "X-S3-Secret-Access-Key": "your-r2-secret-access-key",
-        "X-S3-Bucket-Name": "your-wiki-bucket-name"
+        "Authorization": "Bearer your-auth-token"
       }
     }
   }
 }
 ```
 
-### 2) 로컬 단독 가동 방식 (Local Vault 직접 스캔)
-
-```json
-{
-  "mcpServers": {
-    "llm-wiki-local": {
-      "command": "python",
-      "args": ["/absolute/path/to/src/api/mcp_server.py"],
-      "env": {
-        "OPENAI_API_KEY": "sk-proj-your-openai-api-key",
-        "STORAGE_TYPE": "local",
-        "WIKI_DIR": "/absolute/path/to/your/obsidian/vault",
-        "RERANKER_ENABLED": "true",
-        "DOCUMENT_EXPANSION_ENABLED": "true"
-      }
-    }
-  }
-}
-```
-
-### 3) 제공 MCP 도구 (Tools)
+### 2) 제공 MCP 도구 (Tools)
 
 | 도구명 | 설명 |
 | :--- | :--- |
 | `search_wiki_knowledge` | 자연어 쿼리로 지식베이스를 하이브리드 검색 (리랭킹 + 그래프 확장 포함) |
-| `commit_new_knowledge` | 새 지식을 QA 저널(`qa/`)과 토픽(`topics/`)에 영속 저장. `visibility`로 공개 여부 지정 |
-| `run_database_indexing` | 변경된 마크다운 파일을 감지하여 증분 인덱싱 실행 (문서 확장 포함) |
+| `commit_new_knowledge` | 새 지식을 영속 저장하고 실제 작성된 Markdown만 자동 인덱싱. 실패 시 `retry_targets` 반환 |
+| `run_database_indexing` | 실패 재시도·외부 수정 시 `file_paths`로 지정한 Markdown만 인덱싱 |
 
 ---
 
@@ -269,7 +278,6 @@ data:
   REDIS_WIKI_HOST: "redis-wiki-cache-service.infra.svc.cluster.local"
   REDIS_WIKI_PORT: "6379"
   EMBEDDING_PROVIDER: "openai"
-  STORAGE_TYPE: "s3"
 ```
 
 ### 2) 리소스 권장 사양 (`mcp-server` 컨테이너)
@@ -302,10 +310,10 @@ data:
 ## 9. 코드 설계 및 주요 모듈 구성 (Bounded Context 수직 슬라이싱)
 
 * **Shared Kernel & Infrastructure**:
-  * [src/core/config.py](file:///Users/jw/__dev/knowledge/src/core/config.py): 전역 환경변수 로딩 (리랭커, 문서 확장, DB, 스토리지 설정 등).
+  * [src/core/config.py](file:///Users/jw/__dev/knowledge/src/core/config.py): 전역 환경변수 로딩 (리랭커, 문서 확장, DB 등).
   * [src/core/database/factory.py](file:///Users/jw/__dev/knowledge/src/core/database/factory.py): DB 팩토리 매니저.
   * [src/core/database/connection.py](file:///Users/jw/__dev/knowledge/src/core/database/connection.py): psycopg3 기반 스레드 안전 커넥션 풀 관리.
-  * [src/core/storage/factory.py](file:///Users/jw/__dev/knowledge/src/core/storage/factory.py): Local/S3(R2) 스토리지 추상화 팩토리.
+  * [src/core/storage/factory.py](file:///Users/jw/__dev/knowledge/src/core/storage/factory.py): owner_id별 S3/R2 스토리지 팩토리.
 * **Indexing Bounded Context**:
   * [src/indexing/application/service.py](file:///Users/jw/__dev/knowledge/src/indexing/application/service.py): 증분 인덱싱 파이프라인 + **Document Expansion(Doc2Query) 오프라인 보강**.
   * [src/indexing/domain/model.py](file:///Users/jw/__dev/knowledge/src/indexing/domain/model.py): `Chunk`(VO), `Edge`(4대 신호 가중치) 도메인 모델.

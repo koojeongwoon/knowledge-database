@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Optional
 from pydantic import Field, model_validator
@@ -8,16 +7,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class Settings(BaseSettings):
-    # 지식베이스(Obsidian Vault) 루트 디렉토리 설정
-    wiki_dir: str = Field(default=".", validation_alias="WIKI_DIR")
-
-    # 스토리지 유형 설정 (local, s3)
-    storage_type: str = Field(default="local", validation_alias="STORAGE_TYPE")
-    s3_endpoint_url: str = Field(default="", validation_alias="S3_ENDPOINT_URL")
-    s3_access_key_id: str = Field(default="", validation_alias="S3_ACCESS_KEY_ID")
-    s3_secret_access_key: str = Field(default="", validation_alias="S3_SECRET_ACCESS_KEY")
-    s3_bucket_name: str = Field(default="", validation_alias="S3_BUCKET_NAME")
-
     # DB 설정
     db_type: str = Field(default="postgres", validation_alias="DB_TYPE")
     db_host: str = Field(default="localhost", validation_alias="DB_HOST")
@@ -80,13 +69,6 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Module-level variables to preserve exact import compatibility across the app
-WIKI_DIR = os.path.abspath(settings.wiki_dir)
-STORAGE_TYPE = settings.storage_type.lower()
-S3_ENDPOINT_URL = settings.s3_endpoint_url
-S3_ACCESS_KEY_ID = settings.s3_access_key_id
-S3_SECRET_ACCESS_KEY = settings.s3_secret_access_key
-S3_BUCKET_NAME = settings.s3_bucket_name
-
 DB_TYPE = settings.db_type.lower()
 DB_HOST = settings.db_host
 DB_PORT = settings.db_port
@@ -121,4 +103,3 @@ REDIS_WIKI_PASSWORD = settings.redis_wiki_password
 REDIS_STREAM_HOST = settings.redis_stream_host
 REDIS_STREAM_PORT = settings.redis_stream_port
 REDIS_STREAM_PASSWORD = settings.redis_stream_password
-

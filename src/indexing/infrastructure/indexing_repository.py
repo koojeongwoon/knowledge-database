@@ -1,9 +1,7 @@
 import json
 from typing import Dict, List, Any
 
-from src.core.config import EMBEDDING_DIM
 from src.indexing.domain.repository import BaseIndexingRepository
-from src.api.exceptions import DatabaseException
 
 
 class PostgresIndexingRepository(BaseIndexingRepository):
@@ -23,180 +21,9 @@ class PostgresIndexingRepository(BaseIndexingRepository):
         return config.get("user_id", "SYSTEM")
 
     def initialize_db(self):
-        with self.db_manager.cursor() as cur:
-            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-            
-        self.db_manager.close()
-        
-        with self.db_manager.cursor() as cur:
-            create_table_query = f"""
-            CREATE TABLE IF NOT EXISTS knowledge_documents (
-                id SERIAL PRIMARY KEY,
-                file_path VARCHAR(512) NOT NULL,
-                chunk_index INT NOT NULL DEFAULT 0,
-                doc_type VARCHAR(50) NOT NULL,
-                title VARCHAR(256) NOT NULL,
-                description TEXT,
-                tags TEXT[],
-                content TEXT NOT NULL,
-                parent_content TEXT NOT NULL,
-                raw_frontmatter JSONB,
-                content_hash VARCHAR(64) NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                embedding VECTOR({EMBEDDING_DIM}),
-                owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM',
-                visibility VARCHAR(20) NOT NULL DEFAULT 'public',
-                CONSTRAINT uq_owner_file_chunk UNIQUE (owner_id, file_path, chunk_index)
-            );
-            """
-            cur.execute(create_table_query)
-            
-            create_edges_query = """
-            CREATE TABLE IF NOT EXISTS knowledge_edges (
-                id SERIAL PRIMARY KEY,
-                source_path VARCHAR(512) NOT NULL,
-                target_topic VARCHAR(256) NOT NULL,
-                weight REAL NOT NULL DEFAULT 1.0,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM',
-                visibility VARCHAR(20) NOT NULL DEFAULT 'public',
-                CONSTRAINT uq_owner_edge UNIQUE (owner_id, source_path, target_topic)
-            );
-            """
-            cur.execute(create_edges_query)
-            
-            create_citations_query = """
-            CREATE TABLE IF NOT EXISTS knowledge_citations (
-                file_path VARCHAR(512) NOT NULL,
-                citation_count INT NOT NULL DEFAULT 0,
-                last_cited_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM',
-                PRIMARY KEY (owner_id, file_path)
-            );
-            """
-            cur.execute(create_citations_query)
+        from src.core.database.migrations import run_database_migrations
 
-            create_topics_query = """
-            CREATE TABLE IF NOT EXISTS knowledge_topics (
-                topic_name VARCHAR(256) NOT NULL,
-                category VARCHAR(100) NOT NULL,
-                file_path VARCHAR(512) NOT NULL,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM',
-                PRIMARY KEY (owner_id, topic_name)
-            );
-            """
-            cur.execute(create_topics_query)
-
-            create_audit_logs_query = """
-            CREATE TABLE IF NOT EXISTS knowledge_audit_logs (
-                id SERIAL PRIMARY KEY,
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                user_id VARCHAR(50),
-                action VARCHAR(100),
-                status VARCHAR(50),
-                payload JSONB
-            );
-            """
-            cur.execute(create_audit_logs_query)
-
-            create_users_query = """
-            CREATE TABLE IF NOT EXISTS knowledge_users (
-                user_id VARCHAR(50) PRIMARY KEY,
-                sub_val VARCHAR(100) UNIQUE NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-            cur.execute(create_users_query)
-
-            create_api_keys_query = """
-            CREATE TABLE IF NOT EXISTS knowledge_api_keys (
-                api_key_hash VARCHAR(255) PRIMARY KEY,
-                user_id VARCHAR(50) NOT NULL REFERENCES knowledge_users(user_id) ON DELETE CASCADE,
-                key_name VARCHAR(100),
-                expires_at TIMESTAMP WITH TIME ZONE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-            cur.execute(create_api_keys_query)
-            
-            # ── Migration Queries (자동 마이그레이션 기 주입) ──
-            cur.execute("ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM';")
-            cur.execute("ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'public';")
-            
-            cur.execute("ALTER TABLE knowledge_edges ADD COLUMN IF NOT EXISTS owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM';")
-            cur.execute("ALTER TABLE knowledge_edges ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'public';")
-            cur.execute("ALTER TABLE knowledge_edges ADD COLUMN IF NOT EXISTS weight REAL NOT NULL DEFAULT 1.0;")
-            
-            cur.execute("ALTER TABLE knowledge_topics ADD COLUMN IF NOT EXISTS owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM';")
-            cur.execute("ALTER TABLE knowledge_citations ADD COLUMN IF NOT EXISTS owner_id VARCHAR(50) NOT NULL DEFAULT 'SYSTEM';")
-            
-            # Recreate Unique Constraints
-            try:
-                cur.execute("ALTER TABLE knowledge_documents DROP CONSTRAINT IF EXISTS uq_file_chunk;")
-            except Exception:
-                self.db_manager.rollback()
-            try:
-                cur.execute("ALTER TABLE knowledge_documents DROP CONSTRAINT IF EXISTS uq_owner_file_chunk;")
-            except Exception:
-                self.db_manager.rollback()
-            cur.execute("ALTER TABLE knowledge_documents ADD CONSTRAINT uq_owner_file_chunk UNIQUE (owner_id, file_path, chunk_index);")
-            
-            try:
-                cur.execute("ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS uq_edge;")
-            except Exception:
-                self.db_manager.rollback()
-            try:
-                cur.execute("ALTER TABLE knowledge_edges DROP CONSTRAINT IF EXISTS uq_owner_edge;")
-            except Exception:
-                self.db_manager.rollback()
-            cur.execute("ALTER TABLE knowledge_edges ADD CONSTRAINT uq_owner_edge UNIQUE (owner_id, source_path, target_topic);")
-            
-            try:
-                cur.execute("ALTER TABLE knowledge_topics DROP CONSTRAINT IF EXISTS knowledge_topics_pkey;")
-            except Exception:
-                self.db_manager.rollback()
-            try:
-                cur.execute("ALTER TABLE knowledge_topics ADD PRIMARY KEY (owner_id, topic_name);")
-            except Exception:
-                self.db_manager.rollback()
-
-            try:
-                cur.execute("ALTER TABLE knowledge_citations DROP CONSTRAINT IF EXISTS knowledge_citations_pkey;")
-            except Exception:
-                self.db_manager.rollback()
-            try:
-                cur.execute("ALTER TABLE knowledge_citations ADD PRIMARY KEY (owner_id, file_path);")
-            except Exception:
-                self.db_manager.rollback()
-            
-            try:
-                cur.execute("""
-                CREATE INDEX IF NOT EXISTS knowledge_documents_embedding_idx 
-                ON knowledge_documents USING hnsw (embedding vector_cosine_ops);
-                """)
-            except DatabaseException as e:
-                self.db_manager.rollback()
-                print(f"Warning: HNSW index creation failed ({e}). Attempting IVFFlat index...")
-                try:
-                    cur.execute("""
-                    CREATE INDEX IF NOT EXISTS knowledge_documents_embedding_idx 
-                    ON knowledge_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-                    """)
-                except Exception as ex:
-                    self.db_manager.rollback()
-                    print(f"Warning: Index creation failed. Similarity search will use sequential scan. ({ex})")
-
-            try:
-                cur.execute("""
-                CREATE INDEX IF NOT EXISTS knowledge_documents_fts_idx
-                ON knowledge_documents USING gin (
-                    to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, ''))
-                );
-                """)
-            except DatabaseException as e:
-                self.db_manager.rollback()
-                print(f"Warning: Full-text search GIN index creation failed ({e}). Keyword search will use sequential scan.")
+        run_database_migrations(self.db_manager)
 
     def get_all_file_hashes(self) -> Dict[str, str]:
         owner_id = self._get_owner_id()
@@ -204,6 +31,22 @@ class PostgresIndexingRepository(BaseIndexingRepository):
             cur.execute(
                 "SELECT DISTINCT file_path, content_hash FROM knowledge_documents WHERE owner_id = %s;",
                 (owner_id,)
+            )
+            rows = cur.fetchall()
+            return {row[0]: row[1] for row in rows}
+
+    def get_file_hashes(self, file_paths: List[str]) -> Dict[str, str]:
+        if not file_paths:
+            return {}
+        owner_id = self._get_owner_id()
+        with self.db_manager.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT file_path, content_hash
+                FROM knowledge_documents
+                WHERE owner_id = %s AND file_path = ANY(%s);
+                """,
+                (owner_id, file_paths)
             )
             rows = cur.fetchall()
             return {row[0]: row[1] for row in rows}
@@ -381,3 +224,72 @@ class PostgresIndexingRepository(BaseIndexingRepository):
                 })
             return chunks
 
+    def replace_document(
+        self,
+        file_path: str,
+        chunks: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+    ) -> None:
+        owner_id = self._get_owner_id()
+        chunk_query = """
+        INSERT INTO knowledge_documents (
+            file_path, chunk_index, doc_type, title, description, tags, content,
+            parent_content, raw_frontmatter, content_hash, embedding, owner_id,
+            visibility, updated_at
+        ) VALUES (
+            %(file_path)s, %(chunk_index)s, %(doc_type)s, %(title)s,
+            %(description)s, %(tags)s, %(content)s, %(parent_content)s,
+            %(raw_frontmatter)s, %(content_hash)s, %(embedding)s, %(owner_id)s,
+            %(visibility)s, CURRENT_TIMESTAMP
+        );
+        """
+        edge_query = """
+        INSERT INTO knowledge_edges (source_path, target_topic, weight, owner_id)
+        VALUES (%s, %s, %s, %s);
+        """
+
+        chunk_params = []
+        for doc_data in chunks:
+            tags = doc_data.get("tags", [])
+            if tags is None:
+                tags = []
+            elif not isinstance(tags, list):
+                tags = [tags]
+            visibility = doc_data.get("visibility", "public")
+            if visibility not in ("public", "private"):
+                visibility = "public"
+            chunk_params.append({
+                "file_path": doc_data["file_path"],
+                "chunk_index": doc_data.get("chunk_index", 0),
+                "doc_type": doc_data["doc_type"],
+                "title": doc_data["title"],
+                "description": doc_data.get("description", ""),
+                "tags": tags,
+                "content": doc_data["content"],
+                "parent_content": doc_data.get("parent_content", doc_data["content"]),
+                "raw_frontmatter": json.dumps(doc_data.get("raw_frontmatter", {}), default=self._json_serializer),
+                "content_hash": doc_data["content_hash"],
+                "embedding": "[" + ",".join(map(str, doc_data["embedding"])) + "]",
+                "owner_id": owner_id,
+                "visibility": visibility,
+            })
+
+        with self.db_manager.transaction() as cur:
+            cur.execute(
+                "DELETE FROM knowledge_documents WHERE file_path = %s AND owner_id = %s;",
+                (file_path, owner_id),
+            )
+            cur.execute(
+                "DELETE FROM knowledge_edges WHERE source_path = %s AND owner_id = %s;",
+                (file_path, owner_id),
+            )
+            if chunk_params:
+                cur.executemany(chunk_query, chunk_params)
+            if edges:
+                cur.executemany(
+                    edge_query,
+                    [
+                        (edge["source_path"], edge["target_topic"], edge["weight"], owner_id)
+                        for edge in edges
+                    ],
+                )

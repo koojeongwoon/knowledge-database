@@ -7,11 +7,36 @@ from typing import List, Optional, cast
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from mcp.server.fastmcp import FastMCP
-from src.api.agent_tool import retrieve_wiki_knowledge, commit_wiki_knowledge, run_wiki_indexing
+from src.api.agent_tool import (
+    retrieve_wiki_knowledge,
+    commit_wiki_knowledge,
+    run_wiki_indexing,
+)
 from src.api.middleware import MCPAuthMiddleware
+from src.core.database.factory import DatabaseManager
+from src.core.database.migrations import run_database_migrations
+from src.settings.web import SettingsPathDispatcher, settings_app
+
+database_manager = DatabaseManager()
+try:
+    run_database_migrations(database_manager)
+finally:
+    database_manager.close()
 
 # FastMCP 서버 이름: LLM-Wiki
-mcp = FastMCP("LLM-Wiki", host="0.0.0.0")
+mcp = FastMCP(
+    "LLM-Wiki",
+    host="0.0.0.0",
+    instructions="""
+    [지식베이스(LLM-Wiki) 사용 지침]
+    1. 사용자가 개인적인 메모, 업무, 기획, 아이디어, 과거 대화 이력, 혹은 기술적 질문 등
+       개인 지식베이스 내의 정보 조회가 필요한 모든 질문을 하면,
+       답변하기 전에 반드시 'search_wiki_knowledge' 도구를 실행하여 관련 정보를 먼저 검색하십시오.
+    2. 새로운 지식, 노하우, 업무 규칙 등이 도출되거나 사용자가 지식 기록을 원하면 'commit_new_knowledge'를 사용하십시오.
+    3. 'commit_new_knowledge'는 작성한 파일을 자동 인덱싱합니다. 자동 인덱싱 실패 재시도나 외부에서 직접 수정한 파일에만
+       'run_database_indexing'을 호출하고, 대상 파일 경로만 전달하십시오.
+    """
+)
 
 @mcp.tool(name="search_wiki_knowledge")
 def search_wiki_knowledge(query: str, limit: int = 5) -> str:
@@ -33,7 +58,8 @@ def commit_new_knowledge(
 ) -> str:
     """
     새롭게 습득하거나 정리된 지식을 로컬 QA 저널(qa/)에 파일로 기록하고,
-    선택적으로 기존 공통 개념 토픽(topics/) 문서에 누적 합성합니다.
+    선택적으로 기존 공통 개념 토픽(topics/) 문서에 누적 합성한 뒤
+    실제로 작성한 마크다운 파일만 자동 인덱싱합니다.
     """
     return cast(
         str,
@@ -49,18 +75,22 @@ def commit_new_knowledge(
     )
 
 @mcp.tool(name="run_database_indexing")
-def run_database_indexing() -> str:
+def run_database_indexing(file_paths: List[str]) -> str:
     """
-    로컬 마크다운 파일들의 변경 사항을 감지하여 
-    데이터베이스(pgvector/SQLite)에 실시간으로 증분 인덱싱(임베딩)합니다.
+    지정한 마크다운 파일들의 변경 사항만 감지하여
+    데이터베이스에 실시간으로 증분 인덱싱(임베딩)합니다.
+
+    자동 인덱싱 실패 시 반환된 retry_targets 또는 외부에서 직접 수정한
+    마크다운 파일 경로만 file_paths로 전달합니다.
     """
-    return run_wiki_indexing()
+    return run_wiki_indexing(file_paths=file_paths)
 
 # FastMCP의 내부 Starlette Streamable HTTP App 획득
 mcp_http_app = mcp.streamable_http_app()
 
 # Streamable HTTP App에 순수 ASGI 미들웨어를 감싸서 최종 app 생성
-app = MCPAuthMiddleware(mcp_http_app)
+mcp_app = MCPAuthMiddleware(mcp_http_app)
+app = SettingsPathDispatcher(settings_app, mcp_app)
 
 # Redis Stream 기반의 회원가입 비동기 이벤트 컨슈머 데몬 시작
 try:

@@ -1,5 +1,4 @@
 import hashlib
-import os
 import random
 from abc import ABC, abstractmethod
 from typing import List, Optional
@@ -73,12 +72,8 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
                 api_key = config.get("openai_api_key")
             except Exception:
                 pass
-                
-        # 2. 컨텍스트에도 없으면 전역 환경변수(os.getenv) 폴백 (로컬 구동 하위 호환성)
-        if not api_key:
-            api_key = os.getenv("OPENAI_API_KEY")
-            
-        # 3. 여전히 키가 없다면 에러 발생
+
+        # 2. 사용자 DB 설정에 키가 없다면 명확히 실패합니다.
         if not api_key:
             raise ValueError(
                 "OpenAI API Key가 설정되지 않았거나 유효하지 않습니다. "

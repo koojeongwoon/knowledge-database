@@ -1,9 +1,28 @@
 import argparse
+import json
 import sys
 from src.core.database.factory import DatabaseManager
 from src.indexing.application.service import WikiIndexer
 from src.retrieval.application.service import WikiSearcher
-from src.core.config import EMBEDDING_DIM, EMBEDDING_PROVIDER, WIKI_DIR
+from src.core.config import EMBEDDING_DIM, EMBEDDING_PROVIDER
+from src.core.config import current_user_config
+
+
+def activate_owner_context(owner_id: str):
+    from src.settings.service import UserSettingsService
+
+    service = UserSettingsService()
+    try:
+        stored_config = service.get_runtime_config(owner_id)
+    finally:
+        service.db_manager.close()
+    if not stored_config:
+        raise RuntimeError(f"사용자 {owner_id}의 OpenAI/S3 설정이 DB에 없습니다.")
+    return current_user_config.set({
+        "api_key": f"cli:{owner_id}",
+        "user_id": owner_id,
+        **stored_config,
+    })
 
 def get_embedding_service():
     """
@@ -21,13 +40,11 @@ def get_embedding_service():
         return FakeEmbeddingService(dimension=EMBEDDING_DIM)
 
 def cmd_index(args):
+    owner_token = activate_owner_context(args.owner_id)
     db_manager = DatabaseManager()
-    embedding_service = get_embedding_service()
-    
-    # 현재 디렉토리가 지식베이스 루트 디렉토리입니다.
-    indexer = WikiIndexer(root_dir=WIKI_DIR, db_manager=db_manager, embedding_service=embedding_service)
-    
     try:
+        embedding_service = get_embedding_service()
+        indexer = WikiIndexer(root_dir="", db_manager=db_manager, embedding_service=embedding_service)
         stats = indexer.run_indexing()
         print("\n=== Indexing Summary ===")
         print(f"  Created: {stats['created']}")
@@ -41,13 +58,14 @@ def cmd_index(args):
         sys.exit(1)
     finally:
         db_manager.close()
+        current_user_config.reset(owner_token)
 
 def cmd_search(args):
+    owner_token = activate_owner_context(args.owner_id)
     db_manager = DatabaseManager()
-    embedding_service = get_embedding_service()
-    searcher = WikiSearcher(db_manager=db_manager, embedding_service=embedding_service)
-    
     try:
+        embedding_service = get_embedding_service()
+        searcher = WikiSearcher(db_manager=db_manager, embedding_service=embedding_service)
         results = searcher.search(args.query, limit=args.limit)
         if not results:
             print("No matching documents found.")
@@ -77,18 +95,65 @@ def cmd_search(args):
         sys.exit(1)
     finally:
         db_manager.close()
+        current_user_config.reset(owner_token)
+
+def cmd_retry_indexing(args):
+    """스케줄러에서 호출할 수 있는 실패 인덱싱 큐 일괄 재처리 명령입니다."""
+    from src.api.agent_tool import retry_wiki_indexing
+
+    response = json.loads(retry_wiki_indexing(limit=args.limit, force=args.force))
+    if not response.get("success"):
+        print(response.get("message", "Failed to retry indexing"), file=sys.stderr)
+        sys.exit(1)
+
+    data = response.get("data") or {}
+    print("\n=== Indexing Retry Summary ===")
+    print(f"  Status: {data.get('status', 'unknown')}")
+    print(f"  Processed: {data.get('processed', 0)}")
+    print("==============================")
+
+def cmd_migrate(_args):
+    from src.core.database.migrations import run_database_migrations
+
+    db_manager = DatabaseManager()
+    try:
+        applied = run_database_migrations(db_manager)
+        if applied:
+            print(f"Applied database migrations: {', '.join(map(str, applied))}")
+        else:
+            print("Database schema is up to date.")
+    finally:
+        db_manager.close()
 
 def main():
     parser = argparse.ArgumentParser(description="LLM-Wiki Indexer & Searcher CLI")
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
     
     # index 서브커맨드
-    subparsers.add_parser("index", help="Scan qa/ and topics/ directories and index files to PostgreSQL")
+    index_parser = subparsers.add_parser("index", help="Scan the owner's S3 knowledge objects and index them")
+    index_parser.add_argument("--owner-id", required=True, help="Owner whose DB-backed S3/OpenAI settings are used")
     
     # search 서브커맨드
     search_parser = subparsers.add_parser("search", help="Perform vector similarity search on indexed documents")
     search_parser.add_argument("query", type=str, help="Search query")
     search_parser.add_argument("--limit", type=int, default=5, help="Number of results to return")
+    search_parser.add_argument("--owner-id", required=True, help="Owner whose DB-backed S3/OpenAI settings are used")
+
+    retry_parser = subparsers.add_parser(
+        "retry-indexing",
+        help="Retry queued indexing jobs (intended for cron/Kubernetes CronJob)",
+    )
+    retry_parser.add_argument("--limit", type=int, default=100, help="Maximum jobs per run")
+    retry_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore retry schedule and maximum attempts",
+    )
+
+    subparsers.add_parser(
+        "migrate",
+        help="Apply all pending PostgreSQL schema migrations",
+    )
     
     args = parser.parse_args()
     
@@ -96,6 +161,10 @@ def main():
         cmd_index(args)
     elif args.command == "search":
         cmd_search(args)
+    elif args.command == "retry-indexing":
+        cmd_retry_indexing(args)
+    elif args.command == "migrate":
+        cmd_migrate(args)
 
 if __name__ == "__main__":
     main()

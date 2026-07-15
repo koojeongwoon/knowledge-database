@@ -12,6 +12,11 @@ class BaseIndexingRepository(ABC):
         pass
 
     @abstractmethod
+    def get_file_hashes(self, file_paths: List[str]) -> Dict[str, str]:
+        """요청된 파일들의 현재 인덱스 해시만 조회합니다."""
+        pass
+
+    @abstractmethod
     def upsert_document_chunk(self, doc_data: Dict[str, Any]) -> None:
         pass
 
@@ -39,3 +44,12 @@ class BaseIndexingRepository(ABC):
     def get_document_chunks(self, file_path: str) -> List[Dict[str, Any]]:
         pass
 
+    @abstractmethod
+    def replace_document(
+        self,
+        file_path: str,
+        chunks: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+    ) -> None:
+        """문서 청크와 엣지를 하나의 트랜잭션에서 원자적으로 교체합니다."""
+        pass

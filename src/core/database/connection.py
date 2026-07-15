@@ -101,6 +101,20 @@ class PostgresDatabaseManager(BaseDatabaseManager):
         finally:
             self.close()
 
+    @contextmanager
+    def transaction(self) -> Generator[Any, None, None]:
+        self.connect()
+        try:
+            with self.conn.transaction():
+                with self.conn.cursor() as cur:
+                    yield cur
+        except Exception as e:
+            from src.api.exceptions import DatabaseException
+            logger.error(f"Database transaction failed: {e}")
+            raise DatabaseException(f"Database transaction failed: {e}") from e
+        finally:
+            self.close()
+
     def execute_batch(self, query: str, values: list, template: str = None, page_size: int = 50):
         self.connect()
         from src.api.exceptions import DatabaseException

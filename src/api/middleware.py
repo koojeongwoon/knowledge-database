@@ -34,13 +34,13 @@ async def _send_json_error(send, status: int, detail: str):
     })
 
 def _hash_api_key(plain_key: str) -> str:
-    """평문 API Key를 SHA-256 해시 및 Base64 인코딩하여 인증서버의 keyHash 형식과 맞춥니다."""
+    """평문 API Key를 지식베이스 저장 형식으로 SHA-256 해싱합니다."""
     hasher = hashlib.sha256()
     hasher.update(plain_key.encode('utf-8'))
     return base64.b64encode(hasher.digest()).decode('utf-8')
 
 def _validate_api_key_from_db(plain_key: str) -> dict:
-    """지식디비(knowledge_db)의 api_keys 테이블을 조회하여 키의 실존 여부 및 만료일을 검사합니다."""
+    """지식베이스 소유의 API Key 테이블에서 실존 여부와 만료일을 검사합니다."""
     key_hash = _hash_api_key(plain_key)
     try:
         from src.core.database.factory import DatabaseManager
@@ -116,25 +116,25 @@ async def _validate_api_key_cached(token: str) -> dict:
     return None
 
 def _extract_user_config(headers: dict) -> dict:
-    """HTTP 헤더에서 사용자별 설정 정보를 추출합니다 (factory.py 규격과 완벽히 호환되는 중첩 구조 복구)."""
+    """HTTP 헤더에서는 인증 토큰만 추출합니다."""
     auth_header = headers.get("authorization", "")
     token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else auth_header
     
     return {
         "api_key": token,
-        "openai_api_key": headers.get("x-openai-api-key"),
-        "anthropic_api_key": headers.get("x-anthropic-api-key"),
-        "gemini_api_key": headers.get("x-gemini-api-key"),
-        # factory.py 스펙과 호환되도록 중첩 딕셔너리로 다시 묶음
-        "storage": {
-            "storage_type": headers.get("x-storage-type", "local"),
-            "s3_endpoint_url": headers.get("x-s3-endpoint-url"),
-            "s3_bucket_name": headers.get("x-s3-bucket-name"),
-            "s3_access_key_id": headers.get("x-s3-access-key-id"),
-            "s3_secret_access_key": headers.get("x-s3-secret-access-key"),
-        },
-        "wiki_dir": headers.get("x-wiki-dir", "/app/wiki")
     }
+
+
+def _request_user_config(headers: dict, user_id: str) -> dict:
+    """인증 사용자는 토큰 식별자만 유지하고 자격증명 헤더는 신뢰하지 않습니다."""
+    header_config = _extract_user_config(headers)
+    if user_id != "SYSTEM":
+        return {
+            "api_key": header_config.get("api_key"),
+            "user_id": user_id,
+        }
+    header_config["user_id"] = user_id
+    return header_config
 
 class MCPAuthMiddleware:
     """
@@ -181,8 +181,21 @@ class MCPAuthMiddleware:
             scope["scheme"] = "https"
 
         # ─── 사용자 설정 ContextVar 주입 ───
-        user_config = _extract_user_config(headers)
-        user_config["user_id"] = validated_user_id  # 동기화된 로컬 user_id 바인딩
+        user_config = _request_user_config(headers, validated_user_id)
+
+        # 프론트에서 저장한 설정을 우선 사용하고 미등록 사용자는 기존 헤더 설정을 유지합니다.
+        if validated_user_id != "SYSTEM":
+            try:
+                from src.settings.service import UserSettingsService
+                settings_service = UserSettingsService()
+                try:
+                    stored_config = settings_service.get_runtime_config(validated_user_id)
+                    if stored_config:
+                        user_config.update(stored_config)
+                finally:
+                    settings_service.db_manager.close()
+            except Exception as e:
+                logger.warning(f"Failed to load stored user settings for {validated_user_id}: {e}")
         
         token_val = current_user_config.set(user_config)
         try:

@@ -1,0 +1,10 @@
+const byId=id=>document.getElementById(id);
+const headers=()=>({"Content-Type":"application/json"});
+function badge(id,text,good=false){const el=byId(id);el.textContent=text;el.className=`badge ${good?"good":"neutral"}`}
+function toggleRemote(){byId("remote-fields").hidden=false;badge("storage-state",byId("storage-type").selectedOptions[0].text,true)}
+function message(text,error=false){const el=byId("message");el.textContent=text;el.className=`message${error?" error":""}`}
+byId("storage-type").addEventListener("change",toggleRemote);
+async function loadSettings(){try{const response=await fetch("/api/settings");if(response.status===401){location.replace("/login");return}const data=await response.json();if(!response.ok)throw new Error(data.detail||"설정을 불러오지 못했습니다.");badge("openai-state",data.openai_configured?"저장됨":"미설정",data.openai_configured);byId("storage-type").value=data.storage_type||"s3";byId("endpoint-url").value=data.s3_endpoint_url||"";byId("bucket-name").value=data.s3_bucket_name||"";toggleRemote();message("")}catch(error){message(error.message,true)}}
+byId("logout-button").addEventListener("click",async()=>{await fetch("/logout",{method:"POST"});location.replace("/login")});
+byId("settings-form").addEventListener("submit",async event=>{event.preventDefault();const button=byId("save-button");button.disabled=true;message("저장 중…");const payload={openai_api_key:byId("openai-key").value||null,storage_type:byId("storage-type").value,s3_endpoint_url:byId("endpoint-url").value||null,s3_bucket_name:byId("bucket-name").value||null,s3_access_key_id:byId("access-key").value||null,s3_secret_access_key:byId("secret-key").value||null};try{const response=await fetch("/api/settings",{method:"PUT",headers:headers(),body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.detail||"저장하지 못했습니다.");badge("openai-state",data.openai_configured?"저장됨":"미설정",data.openai_configured);byId("openai-key").value="";byId("access-key").value="";byId("secret-key").value="";message("설정이 안전하게 저장되었습니다.")}catch(error){message(error.message,true)}finally{button.disabled=false}});
+loadSettings();

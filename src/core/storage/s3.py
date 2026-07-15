@@ -1,5 +1,5 @@
 import fnmatch
-import os
+import posixpath
 from typing import List
 
 import boto3
@@ -85,7 +85,7 @@ class S3StorageManager(BaseStorageManager):
                             continue
                             
                         # 패턴 대조 (예: glob *.md 형태)
-                        filename = os.path.basename(key)
+                        filename = posixpath.basename(key)
                         if fnmatch.fnmatch(filename, pattern):
                             files.append(key)
         except Exception as e:
@@ -96,27 +96,16 @@ class S3StorageManager(BaseStorageManager):
     def copy_file(self, src_path: str, dest_path: str) -> None:
         dest_key = self._normalize_key(dest_path)
         
-        # 1. 만약 src_path가 로컬 시스템에 실존하는 파일인 경우 -> S3에 업로드
-        if os.path.exists(src_path) and os.path.isfile(src_path):
-            try:
-                self.s3_client.upload_file(src_path, self.bucket_name, dest_key)
-            except Exception as e:
-                raise IOError(f"Failed to upload local file {src_path} to S3 Key {dest_key}: {e}")
-        else:
-            # 2. S3 버킷 내부 복사
-            src_key = self._normalize_key(src_path)
-            copy_source = {
-                'Bucket': self.bucket_name,
-                'Key': src_key
-            }
-            try:
-                self.s3_client.copy_object(
-                    CopySource=copy_source,
-                    Bucket=self.bucket_name,
-                    Key=dest_key
-                )
-            except ClientError as e:
-                raise FileNotFoundError(f"Failed to copy S3 object from {src_key} to {dest_key}: {e}")
+        src_key = self._normalize_key(src_path)
+        copy_source = {'Bucket': self.bucket_name, 'Key': src_key}
+        try:
+            self.s3_client.copy_object(
+                CopySource=copy_source,
+                Bucket=self.bucket_name,
+                Key=dest_key
+            )
+        except ClientError as e:
+            raise FileNotFoundError(f"Failed to copy S3 object from {src_key} to {dest_key}: {e}")
 
     def delete_file(self, path: str) -> None:
         key = self._normalize_key(path)

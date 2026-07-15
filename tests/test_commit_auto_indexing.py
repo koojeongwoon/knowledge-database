@@ -1,0 +1,125 @@
+import json
+import unittest
+from unittest.mock import patch
+
+from src.api.agent_tool import commit_wiki_knowledge, retry_wiki_indexing
+
+
+class CommitAutoIndexingTests(unittest.TestCase):
+    @patch("src.api.agent_tool.log_audit")
+    @patch("src.api.agent_tool.run_wiki_indexing")
+    @patch("src.api.agent_tool.WikiIntegrationManager")
+    @patch("src.api.agent_tool.DatabaseManager")
+    @patch("src.indexing.infrastructure.job_repository.IndexingJobRepository")
+    def test_indexing_failure_preserves_successful_commit_and_returns_retry_targets(
+        self,
+        job_repository_class,
+        _database_manager,
+        manager_class,
+        run_indexing,
+        _log_audit,
+    ):
+        written_path = "qa/2026-07-15/example/example.md"
+        manager_class.return_value.commit_knowledge.return_value = {
+            "qa_file_path": written_path,
+            "topic_file_path": None,
+            "all_resources": [],
+            "written_paths": [written_path],
+            "details": "committed",
+        }
+        run_indexing.return_value = json.dumps({
+            "success": False,
+            "message": "embedding failed",
+            "data": None,
+        })
+
+        response = json.loads(commit_wiki_knowledge(
+            title="example",
+            description="description",
+            tags=[],
+            content="content",
+        ))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["data"]["qa_file_path"], written_path)
+        self.assertEqual(response["data"]["indexing"]["status"], "failed")
+        self.assertEqual(response["data"]["indexing"]["retry_targets"], [written_path])
+        job_repository = job_repository_class.return_value
+        job_repository.enqueue.assert_called_once_with([written_path])
+        job_repository.start.assert_called_once_with([written_path])
+        job_repository.fail.assert_called_once_with([written_path], "embedding failed")
+
+    @patch("src.api.agent_tool.run_wiki_indexing")
+    @patch("src.settings.service.UserSettingsService")
+    @patch("src.api.agent_tool.DatabaseManager")
+    @patch("src.indexing.infrastructure.job_repository.IndexingJobRepository")
+    def test_batch_retry_claims_and_completes_queued_jobs(
+        self,
+        job_repository_class,
+        _database_manager,
+        settings_service_class,
+        run_indexing,
+    ):
+        paths = ["qa/one.md", "topics/Development/two.md"]
+        repository = job_repository_class.return_value
+        repository.claim.return_value = [
+            {"owner_id": "USER_1", "file_path": path}
+            for path in paths
+        ]
+        settings_service_class.return_value.get_runtime_config.return_value = {
+            "openai_api_key": "stored-key",
+            "storage": {"storage_type": "s3"},
+        }
+        run_indexing.return_value = json.dumps({
+            "success": True,
+            "message": "ok",
+            "data": {"created": 2},
+        })
+
+        response = json.loads(retry_wiki_indexing(limit=20, force=True))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["data"]["processed"], 2)
+        repository.claim.assert_called_once_with(limit=20, force=True)
+        repository.complete.assert_called_once_with(paths, owner_id="USER_1")
+
+    @patch("src.api.agent_tool.run_wiki_indexing")
+    @patch("src.settings.service.UserSettingsService")
+    @patch("src.api.agent_tool.DatabaseManager")
+    @patch("src.indexing.infrastructure.job_repository.IndexingJobRepository")
+    def test_retry_groups_jobs_by_owner_and_loads_each_owner_settings(
+        self,
+        job_repository_class,
+        _database_manager,
+        settings_service_class,
+        run_indexing,
+    ):
+        repository = job_repository_class.return_value
+        repository.claim.return_value = [
+            {"owner_id": "USER_1", "file_path": "qa/one.md"},
+            {"owner_id": "USER_2", "file_path": "qa/two.md"},
+        ]
+        settings_service_class.return_value.get_runtime_config.side_effect = [
+            {"openai_api_key": "user-1-key", "storage": {"storage_type": "s3"}},
+            {"openai_api_key": "user-2-key", "storage": {"storage_type": "s3"}},
+        ]
+
+        observed_configs = []
+        def run_for_owner(file_paths):
+            from src.core.config import current_user_config
+            observed_configs.append((file_paths, current_user_config.get().copy()))
+            return json.dumps({"success": True, "data": {"created": 1}})
+        run_indexing.side_effect = run_for_owner
+
+        response = json.loads(retry_wiki_indexing(limit=20, force=True))
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["data"]["processed"], 2)
+        self.assertEqual([config["user_id"] for _, config in observed_configs], ["USER_1", "USER_2"])
+        self.assertEqual([config["openai_api_key"] for _, config in observed_configs], ["user-1-key", "user-2-key"])
+        repository.complete.assert_any_call(["qa/one.md"], owner_id="USER_1")
+        repository.complete.assert_any_call(["qa/two.md"], owner_id="USER_2")
+
+
+if __name__ == "__main__":
+    unittest.main()

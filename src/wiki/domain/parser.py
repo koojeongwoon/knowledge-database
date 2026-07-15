@@ -33,15 +33,6 @@ def parse_markdown_content(content: str, file_path_for_log: str = None) -> Dict[
         "content_hash": content_hash
     }
 
-def parse_markdown_file(file_path: str) -> Dict[str, Any]:
-    """
-    마크다운 파일을 읽어 YAML Frontmatter와 본문(body), 그리고 전체 파일의 SHA-256 해시를 리턴합니다.
-    (하위 호환성 유지)
-    """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    return parse_markdown_content(content, file_path)
-
 def extract_wiki_links(body: str) -> List[str]:
     """
     본문에서 [[WikiLink]] 형식의 링크 대상 단어들을 추출합니다.

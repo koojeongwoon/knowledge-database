@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: llm-wiki
+  labels:
+    app: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      containers:
+        - name: mcp-app
+          image: ghcr.io/koojeongwoon/msa/mcp-wiki-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            # 1. 민감 정보 (Secret에서 로드)
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-secrets
+                  key: knowledge-password
+            - name: REDIS_WIKI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-secrets
+                  key: redis-password
+            # 2. 리랭커 모델 런타임 캐시 (지식 저장소와 무관한 임시 데이터)
+            - name: HF_HOME
+              value: /tmp/huggingface
+            # 3. Redis Stream 패스워드 설정 (회원가입 이벤트 구독용)
+            - name: REDIS_STREAM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-secrets
+                  key: redis-stream-password
+            - name: SETTINGS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-secrets
+                  key: settings-encryption-key
+                  optional: true
+          envFrom:
+            - configMapRef:
+                name: mcp-config
+
+          resources:
+            requests:
+              memory: "1.5Gi"
+              cpu: "500m"
+            limits:
+              memory: "3Gi"
+              cpu: "1.5"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-service
+  namespace: llm-wiki
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+  selector:
+    app: mcp-server
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-ingress
+  namespace: llm-wiki
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - mcp.lynply.com
+        - knowledge.lynply.com
+      secretName: cloudflare-origin-tls
+  rules:
+    - host: mcp.lynply.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-service
+                port:
+                  number: 8000
+    - host: knowledge.lynply.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-service
+                port:
+                  number: 8000

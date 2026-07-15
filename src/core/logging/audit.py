@@ -1,15 +1,9 @@
 import datetime
 import json
 import logging
-import os
 import queue
-from logging.handlers import TimedRotatingFileHandler, QueueHandler, QueueListener
+from logging.handlers import QueueHandler, QueueListener
 from typing import Any, Dict
-
-# 로그 파일 저장 경로 설정 (프로젝트 루트/logs 디렉토리)
-LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "logs"))
-os.makedirs(LOG_DIR, exist_ok=True)
-AUDIT_LOG_FILE = os.path.join(LOG_DIR, "audit.log")
 
 # 1. 커스텀 데이터베이스 감사 로깅 핸들러 정의
 class PostgresAuditHandler(logging.Handler):
@@ -48,20 +42,11 @@ logger.handlers.clear()
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.INFO)
 
-# (2) 롤링 파일 핸들러 (매일 자정에 롤링, 30일 보관)
-file_handler = TimedRotatingFileHandler(
-    filename=AUDIT_LOG_FILE,
-    when="midnight",
-    interval=1,
-    backupCount=30,
-    encoding="utf-8"
-)
-file_handler.setLevel(logging.INFO)
 # 포맷터 설정
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
 
-# (3) PostgreSQL DB 저장 핸들러
+# (2) PostgreSQL DB 저장 핸들러
 db_handler = PostgresAuditHandler()
 db_handler.setLevel(logging.INFO)
 
@@ -70,8 +55,8 @@ log_queue = queue.Queue(-1) # 무제한 큐
 queue_handler = QueueHandler(log_queue)
 logger.addHandler(queue_handler)
 
-# 백그라운드 리스너 기동 (실제 디바이스 디스크/DB 쓰기는 여기서 전담)
-listener = QueueListener(log_queue, stream_handler, file_handler, db_handler, respect_handler_level=True)
+# 백그라운드 리스너 기동 (stdout/DB 기록)
+listener = QueueListener(log_queue, stream_handler, db_handler, respect_handler_level=True)
 listener.start()
 
 # 어플리케이션 종료 시 리스너를 정지하기 위한 등록 (선택적이나 안전장치)
@@ -81,8 +66,7 @@ atexit.register(listener.stop)
 
 def log_audit(action: str, status: str, user_id: str = "SYSTEM", payload: Dict[str, Any] = None):
     """
-    구조화된 JSON 감사 로그를 남기는 공통 유틸리티 함수.
-    로거 호출(logger.info)을 통해 큐에 등록되며, 비동기 백그라운드에서 파일/DB/stdout으로 처리됩니다.
+    구조화된 JSON 감사 로그를 stdout과 PostgreSQL에 남깁니다.
     """
     audit_data = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),

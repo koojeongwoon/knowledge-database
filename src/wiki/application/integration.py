@@ -1,4 +1,4 @@
-import os
+import posixpath
 import datetime
 from typing import List, Dict, Any
 
@@ -41,14 +41,14 @@ class WikiIntegrationManager:
         
         # 1. 경로 결정
         title_slug = slugify(title) or "qa-journal"
-        qa_bundle_dir = os.path.join("qa", date_str, f"{time_str}-{title_slug}")
+        qa_bundle_dir = posixpath.join("qa", date_str, f"{time_str}-{title_slug}")
         
         try:
             self.storage.makedirs(qa_bundle_dir)
         except Exception as e:
             raise StorageOperationException(f"저장소 디렉토리 생성 실패: {e}") from e
 
-        qa_file_path = os.path.join(qa_bundle_dir, f"{time_str}-{title_slug}.md")
+        qa_file_path = posixpath.join(qa_bundle_dir, f"{time_str}-{title_slug}.md")
 
         # 2. 리소스 처리 및 사이드카 생성
         all_resources = []
@@ -67,10 +67,11 @@ class WikiIntegrationManager:
                     
         all_resources = list(dict.fromkeys(all_resources))
         resource_info = ""
+        written_paths = []
 
         if all_resources:
             try:
-                assets_dir = os.path.join(qa_bundle_dir, "assets")
+                assets_dir = posixpath.join(qa_bundle_dir, "assets")
                 self.storage.makedirs(assets_dir)
                 
                 copied_images = []
@@ -78,9 +79,9 @@ class WikiIntegrationManager:
                 image_extensions = (".png", ".jpg", ".jpeg", ".webp", ".gif")
                 
                 for res_path in all_resources:
-                    if os.path.exists(res_path):
-                        filename = os.path.basename(res_path)
-                        dest_path = os.path.join(assets_dir, filename)
+                    if self.storage.exists(res_path):
+                        filename = posixpath.basename(res_path)
+                        dest_path = posixpath.join(assets_dir, filename)
                         self.storage.copy_file(res_path, dest_path)
                         
                         is_image = filename.lower().endswith(image_extensions)
@@ -92,8 +93,9 @@ class WikiIntegrationManager:
                         if res_path in summary_map:
                             summary = summary_map[res_path]
                             sidecar_content = build_sidecar_markdown(filename, summary, now)
-                            sidecar_file_path = os.path.join(assets_dir, f"{filename}.md")
+                            sidecar_file_path = posixpath.join(assets_dir, f"{filename}.md")
                             self.storage.write_text(sidecar_file_path, sidecar_content)
+                            written_paths.append(sidecar_file_path)
                 
                 attachments_md = []
                 if copied_images:
@@ -111,6 +113,7 @@ class WikiIntegrationManager:
         qa_content = build_journal_markdown(title, description, tags, content, now, visibility)
         try:
             self.storage.write_text(qa_file_path, qa_content)
+            written_paths.append(qa_file_path)
         except Exception as e:
             raise StorageOperationException(f"Q&A 저널 파일 쓰기 실패: {e}") from e
 
@@ -133,7 +136,7 @@ class WikiIntegrationManager:
                 else:
                     topic_files = self.storage.list_files("topics", "*.md")
                     for f_rel in topic_files:
-                        if os.path.basename(f_rel) == f"{topic_slug}.md":
+                        if posixpath.basename(f_rel) == f"{topic_slug}.md":
                             topic_file_path = f_rel
                             parts = f_rel.replace("\\", "/").split("/")
                             if len(parts) >= 3:
@@ -141,9 +144,9 @@ class WikiIntegrationManager:
                             break
                 
                 if not topic_file_path:
-                    topic_file_path = os.path.join("topics", category, f"{topic_slug}.md")
+                    topic_file_path = posixpath.join("topics", category, f"{topic_slug}.md")
                     
-                self.storage.makedirs(os.path.dirname(topic_file_path))
+                self.storage.makedirs(posixpath.dirname(topic_file_path))
                 repo.upsert_topic(topic_slug, category, topic_file_path)
             except Exception as e:
                 raise DatabaseException(f"토픽 메타데이터 DB 동기화 실패: {e}") from e
@@ -155,6 +158,7 @@ class WikiIntegrationManager:
                     old_content = self.storage.read_text(topic_file_path)
                     new_content = synthesize_topic(old_content, topic_update_text, now)
                     self.storage.write_text(topic_file_path, new_content)
+                    written_paths.append(topic_file_path)
                     topic_info = f" 및 토픽 '{topic_slug}.md' 누적 합성"
                 except Exception as e:
                     raise StorageOperationException(f"기존 토픽 마크다운 업데이트 실패: {e}") from e
@@ -162,6 +166,7 @@ class WikiIntegrationManager:
                 try:
                     topic_content = build_new_topic_markdown(topic_name, tags, topic_update_text, now)
                     self.storage.write_text(topic_file_path, topic_content)
+                    written_paths.append(topic_file_path)
                     topic_info = f" 및 신규 토픽 '{topic_slug}.md' 생성"
                 except Exception as e:
                     raise StorageOperationException(f"신규 토픽 마크다운 생성 실패: {e}") from e
@@ -170,5 +175,6 @@ class WikiIntegrationManager:
             "qa_file_path": qa_file_path,
             "topic_file_path": topic_file_path,
             "all_resources": all_resources,
+            "written_paths": list(dict.fromkeys(written_paths)),
             "details": f"Q&A 저널 작성{topic_info}{resource_info} 완료"
         }

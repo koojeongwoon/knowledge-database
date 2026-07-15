@@ -15,10 +15,29 @@ __pycache__/
 # Local Environment Variables & Secrets
 .env
 .env.*
-!.env.example
 
-# Kubernetes Manifests
-k8s/
+# Kubernetes secrets and local credentials
+# Keep deployable manifests and sanitized *.example templates trackable.
+**/secret.yaml
+**/secrets.yaml
+**/*-secret.yaml
+**/*-secrets.yaml
+**/credentials.json
+**/kubeconfig
+**/kubeconfig.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+!**/*.example
+# Environment templates expose configuration names and stay local.
+.env.example
+# Secret templates also expose credential names and are kept out of Git.
+**/secret.yaml.example
+**/secrets.yaml.example
+**/*-secret.yaml.example
+**/*-secrets.yaml.example
 
 
 # macOS system files
@@ -50,6 +69,7 @@ attachments/
 # Scratch & Temporary files
 scratch/
 *.log
+*.log.*
 *.pid
 
 # Malware Scanner (screener) project
@@ -63,6 +83,3 @@ tools/
 
 # Kubernetes Infrastructure
 k8s-infra/
-
-
-

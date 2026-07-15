@@ -1,5 +1,6 @@
 import json
-from typing import List, Dict, Any
+from collections import defaultdict
+from typing import List, Dict, Any, Optional
 
 from src.api.decorators import tool_wrapper
 from src.api.exceptions import (
@@ -7,7 +8,7 @@ from src.api.exceptions import (
     InvalidArgumentException,
     DatabaseException,
 )
-from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM, WIKI_DIR
+from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM
 from src.core.config import current_user_config
 from src.core.database.factory import DatabaseManager
 from src.core.logging.audit import log_audit  # 감사 로거 유틸 임포트
@@ -110,6 +111,51 @@ def commit_wiki_knowledge(
             resource_summaries=resource_summaries,
             visibility=visibility
         )
+
+        written_paths = result.get("written_paths", [])
+        indexing = {
+            "status": "skipped",
+            "indexed_files": [],
+            "retry_targets": [],
+        }
+        if written_paths:
+            queue_db = DatabaseManager()
+            from src.indexing.infrastructure.job_repository import IndexingJobRepository
+            job_repository = IndexingJobRepository(queue_db)
+            try:
+                job_repository.enqueue(written_paths)
+                job_repository.start(written_paths)
+                indexing_response = json.loads(run_wiki_indexing(file_paths=written_paths))
+                if indexing_response.get("success"):
+                    job_repository.complete(written_paths)
+                    indexing = {
+                        "status": "success",
+                        "indexed_files": written_paths,
+                        "retry_targets": [],
+                        "stats": indexing_response.get("data"),
+                    }
+                else:
+                    error = indexing_response.get("message") or "Indexing failed"
+                    job_repository.fail(written_paths, error)
+                    indexing = {
+                        "status": "failed",
+                        "indexed_files": [],
+                        "retry_targets": written_paths,
+                        "error": error,
+                    }
+            except Exception as indexing_error:
+                try:
+                    job_repository.fail(written_paths, str(indexing_error))
+                except Exception:
+                    pass
+                indexing = {
+                    "status": "failed",
+                    "indexed_files": [],
+                    "retry_targets": written_paths,
+                    "error": str(indexing_error),
+                }
+            finally:
+                queue_db.close()
         
         # 지식 저널 생성 및 합성 성공 감사 로그 기록
         log_audit(
@@ -128,7 +174,8 @@ def commit_wiki_knowledge(
         return {
             "qa_file_path": result["qa_file_path"],
             "topic_file_path": result["topic_file_path"],
-            "details": result["details"]
+            "details": result["details"],
+            "indexing": indexing,
         }
     except Exception as e:
         log_audit("KNOWLEDGE_COMMIT", "FAILED", user_id=user_id, payload={"title": title, "error": str(e)})
@@ -136,7 +183,7 @@ def commit_wiki_knowledge(
 
 
 @tool_wrapper
-def run_wiki_indexing() -> Dict[str, Any]:
+def run_wiki_indexing(file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     로컬 마크다운 파일들의 변경 사항을 감지하여 데이터베이스에 실시간으로 증분 인덱싱(임베딩)합니다.
     """
@@ -160,15 +207,15 @@ def run_wiki_indexing() -> Dict[str, Any]:
         else:
             embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
             
-        indexer = WikiIndexer(root_dir=WIKI_DIR, db_manager=db_manager, embedding_service=embedding_service)
-        stats = indexer.run_indexing()
+        indexer = WikiIndexer(root_dir="", db_manager=db_manager, embedding_service=embedding_service)
+        stats = indexer.run_indexing(file_paths=file_paths)
         
         # 인덱싱 완료 감사 로그 성공 기록
         log_audit(
             action="VECTOR_INDEXING_RUN",
             status="SUCCESS",
             user_id=user_id,
-            payload={"stats": stats}
+            payload={"stats": stats, "file_paths": file_paths}
         )
         return stats
     except Exception as e:
@@ -179,57 +226,79 @@ def run_wiki_indexing() -> Dict[str, Any]:
 
 
 @tool_wrapper
-def check_knowledge_drift() -> str:
-    """
-    스케줄 관리 디렉토리(.agents/schedules/)를 분석하여 갱신 주기가 도달한 노트들의 목록을 리턴합니다.
-    """
-    from src.indexing.application.refresher_service import KnowledgeRefresher
-    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
+def retry_wiki_indexing(limit: int = 100, force: bool = True) -> Dict[str, Any]:
+    """DB 큐 작업을 소유자별 설정 컨텍스트에서 재처리합니다."""
+    if limit < 1 or limit > 1000:
+        raise InvalidArgumentException("limit은 1 이상 1000 이하여야 합니다.")
+
+    from src.indexing.infrastructure.job_repository import IndexingJobRepository
+
+    db_manager = DatabaseManager()
+    repository = IndexingJobRepository(db_manager)
     try:
-        targets = refresher.get_expired_targets()
-        if not targets:
-            return "CHECK_RESULT: NO_EXPIRED_TARGETS"
-        return json.dumps(targets, ensure_ascii=False, indent=2)
+        jobs = repository.claim(limit=limit, force=force)
+        if not jobs:
+            return {"status": "empty", "processed": 0, "jobs": []}
+
+        jobs_by_owner = defaultdict(list)
+        for job in jobs:
+            jobs_by_owner[job["owner_id"]].append(job["file_path"])
+
+        processed = 0
+        results = []
+        for owner_id, file_paths in jobs_by_owner.items():
+            from src.settings.service import UserSettingsService
+
+            settings_service = UserSettingsService()
+            try:
+                stored_config = settings_service.get_runtime_config(owner_id)
+            finally:
+                settings_service.db_manager.close()
+
+            owner_config = {
+                "api_key": f"background:{owner_id}",
+                "user_id": owner_id,
+                **stored_config,
+            }
+            context_token = current_user_config.set(owner_config)
+            try:
+                response = json.loads(run_wiki_indexing(file_paths=file_paths))
+                if response.get("success"):
+                    repository.complete(file_paths, owner_id=owner_id)
+                    processed += len(file_paths)
+                    results.append({
+                        "owner_id": owner_id,
+                        "status": "success",
+                        "file_paths": file_paths,
+                        "stats": response.get("data"),
+                    })
+                else:
+                    error = response.get("message") or "Indexing retry failed"
+                    repository.fail(file_paths, error, owner_id=owner_id)
+                    results.append({
+                        "owner_id": owner_id,
+                        "status": "failed",
+                        "file_paths": file_paths,
+                        "error": error,
+                    })
+            except Exception as owner_error:
+                repository.fail(file_paths, str(owner_error), owner_id=owner_id)
+                results.append({
+                    "owner_id": owner_id,
+                    "status": "failed",
+                    "file_paths": file_paths,
+                    "error": str(owner_error),
+                })
+            finally:
+                current_user_config.reset(context_token)
+
+        return {
+            "status": "success" if processed == len(jobs) else "partial_failure",
+            "processed": processed,
+            "claimed": len(jobs),
+            "results": results,
+        }
     except Exception as e:
-        raise WikiBaseException(f"Error scanning expired schedules: {e}") from e
-
-
-@tool_wrapper
-def evaluate_knowledge_drift(file_path: str, latest_text: str) -> str:
-    """
-    특정 노트의 로컬 텍스트와 새로 수집된 최신 정보를 LLM을 통해 비교하여 갱신 괴리가 있는지 판독합니다.
-    """
-    from src.indexing.application.refresher_service import KnowledgeRefresher
-    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
-    try:
-        res = refresher.evaluate_drift(rel_path=file_path, latest_text=latest_text)
-        return json.dumps(res, ensure_ascii=False, indent=2)
-    except Exception as e:
-        raise WikiBaseException(f"Error evaluating knowledge drift: {e}") from e
-
-
-@tool_wrapper
-def apply_knowledge_merge(file_path: str) -> str:
-    """
-    사용자의 승인을 얻은 경우, scratch/에 생성된 임시 갱신안을 원본 지식 마크다운에 병합합니다.
-    """
-    from src.indexing.application.refresher_service import KnowledgeRefresher
-    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
-    try:
-        return refresher.apply_merge(rel_path=file_path)
-    except Exception as e:
-        raise WikiBaseException(f"Error merging knowledge drift: {e}") from e
-
-
-@tool_wrapper
-def update_knowledge_schedule(file_path: str, interval: str, source: str, category: str = "programming") -> str:
-    """
-    대화를 통해 특정 마크다운 노트의 갱신 주기(refresh_interval) 및 수집 소스(refresh_source)를 변경합니다.
-    """
-    from src.indexing.application.refresher_service import KnowledgeRefresher
-    refresher = KnowledgeRefresher(root_dir=WIKI_DIR)
-    try:
-        refresher.update_or_create_schedule(rel_path=file_path, interval=interval, source=source, category=category)
-        return f"성공: {file_path} 노정의 갱신 주기를 {interval}(소출처: {source}, 범주: {category})으로 변경 완료했습니다."
-    except Exception as e:
-        raise WikiBaseException(f"Error updating knowledge schedule: {e}") from e
+        raise WikiBaseException(f"인덱싱 재시도 중 오류 발생: {e}") from e
+    finally:
+        db_manager.close()

@@ -1,8 +1,7 @@
-import os
+import posixpath
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
-from src.core.config import STORAGE_TYPE
 from src.core.database.factory import DatabaseManager
 from src.core.storage.factory import StorageManager
 from src.indexing.domain.embedding import BaseEmbeddingService
@@ -41,10 +40,9 @@ class WikiIndexer:
         if DOCUMENT_EXPANSION_ENABLED:
             try:
                 from openai import OpenAI
-                api_key = os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    from src.core.config import current_user_config
-                    api_key = (current_user_config.get() or {}).get("openai_api_key")
+                from src.core.config import current_user_config
+                config = current_user_config.get() or {}
+                api_key = config.get("openai_api_key")
                 if api_key:
                     self.openai_client = OpenAI(api_key=api_key)
             except Exception as e:
@@ -138,6 +136,34 @@ class WikiIndexer:
             local_files.extend(files)
         return local_files
 
+    def _normalize_target_files(self, file_paths: List[str]) -> List[str]:
+        """인덱싱 요청 경로를 스토리지 기준의 안전한 상대 경로로 정규화합니다."""
+        normalized = []
+        seen = set()
+        for file_path in file_paths:
+            if not isinstance(file_path, str) or not file_path.strip():
+                raise ValueError("인덱싱 대상 경로는 비어 있지 않은 문자열이어야 합니다.")
+
+            rel_path = file_path.strip().replace("\\", "/")
+            if posixpath.isabs(rel_path):
+                raise ValueError(f"S3 객체 키는 절대 경로일 수 없습니다: {file_path}")
+            rel_path = posixpath.normpath(rel_path).replace("\\", "/")
+
+            top_level = rel_path.split("/", 1)[0]
+            if (
+                rel_path in ("", ".")
+                or rel_path == ".."
+                or rel_path.startswith("../")
+                or not rel_path.lower().endswith(".md")
+                or top_level not in self.target_dirs
+            ):
+                raise ValueError(f"지원하지 않는 인덱싱 대상 경로입니다: {file_path}")
+
+            if rel_path not in seen:
+                normalized.append(rel_path)
+                seen.add(rel_path)
+        return normalized
+
     def _process_single_file(self, rel_path: str, is_new: bool, db_manager: DatabaseManager) -> str:
         """
         단일 파일의 파싱 → 임베딩 → DB 적재를 처리합니다.
@@ -164,19 +190,21 @@ class WikiIndexer:
             else:
                 doc_type = "Unknown"
 
-        title = fm.get("title") or os.path.splitext(os.path.basename(rel_path))[0]
+        title = fm.get("title") or posixpath.splitext(posixpath.basename(rel_path))[0]
         description = fm.get("description", "")
         tags = fm.get("tags", [])
 
         action_name = "Indexing new" if is_new else "Updating modified"
         print(f"[+] {action_name} file: {rel_path}")
 
-        # 중복 등록 방지 및 데이터 무결성을 위해 기존 저장된 문서 청크와 엣지 삭제
-        repo.delete_document(rel_path)
+        # 삭제 전에 기존 임베딩을 읽어 동일한 청크의 임베딩을 재사용합니다.
+        existing_chunks = repo.get_document_chunks(rel_path)
+        existing_map = {c["content"]: c["embedding"] for c in existing_chunks if c.get("embedding")}
 
         # 본문 내 [[WikiLink]] 추출하여 엣지(관계) 저장
         wiki_links = extract_wiki_links(parsed_data["body"])
         source_meta = {"source_path": fm.get("source_path"), "type": doc_type}
+        db_edges = []
         
         for target_topic in wiki_links:
             # 1. 엣지 가중치 결정을 도메인 모델(Edge)에 완벽 위임
@@ -190,11 +218,11 @@ class WikiIndexer:
                 target_meta=target_meta,
                 custom_relations=fm.get("custom_relations", [])
             )
-            repo.insert_edge(edge.source_path, edge.target_topic, edge.weight)
-
-        # 0. 로드된 기존 DB 청크들을 조회하여 내용(content) 기준의 임베딩 캐시 맵 빌드
-        existing_chunks = self.repository.get_document_chunks(rel_path)
-        existing_map = {c["content"]: c["embedding"] for c in existing_chunks if c.get("embedding")}
+            db_edges.append({
+                "source_path": edge.source_path,
+                "target_topic": edge.target_topic,
+                "weight": edge.weight,
+            })
 
         # 청크 수집 (임베딩 전 단계)
         parent_chunks = split_markdown_by_headers(parsed_data["body"])
@@ -282,14 +310,15 @@ class WikiIndexer:
                 c_dict["embedding"] = embedding
                 db_chunks.append(c_dict)
 
-        # 배치 DB INSERT (50개 단위 청킹)
-        repo.upsert_document_chunks_batch(db_chunks)
+        # 임베딩 준비가 모두 끝난 뒤 청크와 엣지를 하나의 트랜잭션으로 교체합니다.
+        # 이 단계 이전에 실패하면 기존 검색 인덱스는 그대로 유지됩니다.
+        repo.replace_document(rel_path, db_chunks, db_edges)
 
         return "created" if is_new else "updated"
 
 
 
-    def run_indexing(self) -> Dict[str, Any]:
+    def run_indexing(self, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         증분 인덱싱 파이프라인을 실행합니다.
         - 로컬 스캔 결과와 DB 데이터를 비교하여 변경된 건만 임베딩/업서트
@@ -298,26 +327,19 @@ class WikiIndexer:
         - 문서를 부모/자식 단위로 이중 청킹하여 개별 임베딩 후 적재
         - 처리 대상이 PARALLEL_THRESHOLD를 초과하면 병렬 처리로 자동 전환
         """
+        scoped = file_paths is not None
+        requested_files = self._normalize_target_files(file_paths or []) if scoped else None
         print("Starting LLM-Wiki incremental indexing...")
-        
-        # 0. 이미지 전처리 프로세스 실행 (사이드카 캐싱)
-        # 0. 이미지 전처리 프로세스 실행 (로컬 파일 시스템 전용 사이드카 캐싱)
-        if STORAGE_TYPE == "local":
-            try:
-                from src.media.application.processor import ImageProcessor
-                image_processor = ImageProcessor(root_dir=self.root_dir)
-                image_stats = image_processor.process_images()
-                print(f"[+] Image preprocessing completed. Stats: {image_stats}")
-            except Exception as e:
-                print(f"[✗] Warning: Image preprocessing failed: {e}")
-        else:
-            print("[~] Storage is set to S3/R2. Skipping local image preprocessing.")
         
         # 1. DB 초기화 (테이블 및 인덱스 생성)
         self.repository.initialize_db()
         
         # 2. 로컬 파일 목록 및 DB의 파일 해시 맵 획득
-        local_files = self._get_local_files()
+        local_files = (
+            [path for path in requested_files if self.storage.exists(path)]
+            if scoped
+            else self._get_local_files()
+        )
         
         # 2-1. 로컬 메타데이터 캐시 구축 (가중치 계산용) 및 토픽 DB 맵 생성
         self.topic_metadata = {}
@@ -330,7 +352,7 @@ class WikiIndexer:
                 s_path = fm.get("source_path")
                 t_type = fm.get("type")
                 
-                t_slug = os.path.splitext(os.path.basename(f))[0].lower()
+                t_slug = posixpath.splitext(posixpath.basename(f))[0].lower()
                 metadata = {"source_path": s_path, "type": t_type}
                 
                 self.topic_metadata[t_slug] = metadata
@@ -343,12 +365,16 @@ class WikiIndexer:
                     # topics/Category/filename.md 형식
                     if len(parts) >= 3:
                         category = parts[1]
-                        topic_name = os.path.splitext(parts[-1])[0].lower()
+                        topic_name = posixpath.splitext(parts[-1])[0].lower()
                         self.repository.upsert_topic(topic_name, category, f)
             except Exception as e:
                 print(f"Warning: Failed to sync topic database for {f}: {e}")
                 
-        db_hashes = self.repository.get_all_file_hashes()
+        db_hashes = (
+            self.repository.get_file_hashes(requested_files)
+            if scoped
+            else self.repository.get_all_file_hashes()
+        )
         
         stats = {
             "created": 0,

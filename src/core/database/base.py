@@ -21,6 +21,12 @@ class BaseDatabaseManager(ABC):
         pass
 
     @abstractmethod
+    @contextmanager
+    def transaction(self) -> Generator[Any, None, None]:
+        """여러 DB 작업을 하나의 원자적 트랜잭션으로 실행합니다."""
+        pass
+
+    @abstractmethod
     def execute_batch(self, query: str, values: list, template: str = None, page_size: int = 50):
         """배치 삽입 처리를 추상화하여 하위 드라이버 종속성을 제거합니다."""
         pass
