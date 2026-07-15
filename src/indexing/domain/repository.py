@@ -34,3 +34,8 @@ class BaseIndexingRepository(ABC):
     @abstractmethod
     def get_topic_by_name(self, topic_name: str) -> Any:
         pass
+
+    @abstractmethod
+    def get_document_chunks(self, file_path: str) -> List[Dict[str, Any]]:
+        pass
+

@@ -12,6 +12,17 @@ from src.wiki.domain.parser import parse_markdown_content
 PARALLEL_THRESHOLD = 10
 PARALLEL_WORKERS = 4
 
+from pydantic import BaseModel, Field
+
+class SingleChunkExpansion(BaseModel):
+    chunk_index: int = Field(description="The unique index of the chunk being expanded")
+    questions: List[str] = Field(description="Exactly three natural user questions in Korean")
+    keywords: List[str] = Field(description="Exactly five key search terms, keywords, synonyms, or translations")
+
+class BatchExpansionResponse(BaseModel):
+    expansions: List[SingleChunkExpansion] = Field(description="List of expansions for each given chunk")
+
+
 
 from src.indexing.infrastructure.repository import IndexingRepository
 
@@ -66,6 +77,55 @@ class WikiIndexer:
         except Exception as e:
             print(f"Warning: Failed to generate document expansion text: {e}")
             return ""
+
+    def _generate_batch_expansion(self, title: str, description: str, batch_tasks: List[Tuple[int, str]]) -> List[Tuple[int, str]]:
+        """
+        Sends a mini-batch of chunks to OpenAI using Structured Outputs to generate questions/keywords.
+        Returns list of (chunk_index, expansion_text)
+        """
+        if not self.openai_client:
+            return []
+        
+        chunks_prompt = ""
+        for idx, content in batch_tasks:
+            chunks_prompt += f"=== [CHUNK INDEX {idx}] ===\n{content}\n\n"
+            
+        prompt = (
+            "You are an AI assistant optimizing search indexes for a technical knowledge base.\n"
+            f"Analyze the following list of separate text chunks from the document titled '{title}'.\n\n"
+            f"Document Description: {description}\n\n"
+            "For EACH chunk, generate:\n"
+            "1. Three natural user questions (in Korean) that this specific chunk directly answers.\n"
+            "2. Five key search keywords/terms/synonyms/translations (both in Korean and English) relevant to this chunk.\n\n"
+            "You must respond in the specified Structured Output format.\n\n"
+            "Here are the source chunks to analyze:\n"
+            f"{chunks_prompt}"
+        )
+        
+        try:
+            response = self.openai_client.beta.chat.completions.parse(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a technical search index optimizer."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=BatchExpansionResponse,
+                temperature=0.2
+            )
+            
+            parsed_response = response.choices[0].message.parsed
+            results = []
+            if parsed_response and parsed_response.expansions:
+                for exp in parsed_response.expansions:
+                    q_str = "\n".join(f"- {q}" for q in exp.questions)
+                    k_str = ", ".join(exp.keywords)
+                    expansion_text = f"[Expected Questions]\n{q_str}\n\n[Keywords]\n{k_str}"
+                    results.append((exp.chunk_index, expansion_text))
+            return results
+        except Exception as e:
+            print(f"Warning: Failed to generate batch expansion text via OpenAI Structured Outputs: {e}")
+            return []
+
 
     def _get_local_files(self) -> List[str]:
         """
@@ -132,12 +192,19 @@ class WikiIndexer:
             )
             repo.insert_edge(edge.source_path, edge.target_topic, edge.weight)
 
+        # 0. 로드된 기존 DB 청크들을 조회하여 내용(content) 기준의 임베딩 캐시 맵 빌드
+        existing_chunks = self.repository.get_document_chunks(rel_path)
+        existing_map = {c["content"]: c["embedding"] for c in existing_chunks if c.get("embedding")}
+
         # 청크 수집 (임베딩 전 단계)
         parent_chunks = split_markdown_by_headers(parsed_data["body"])
 
-        pending_chunks = []
-        embedding_texts = []
+        pending_chunks_need_embed = []  # 임베딩이 새로 필요한 청크 매핑용 목록
+        embedding_texts = []           # 실제 임베딩 요청을 보낼 신규/수정된 텍스트 리스트
+        db_chunks = []                 # 최종 DB 업서트 대상 청크 리스트
+        
         chunk_index = 0
+        expansion_tasks = []           # List of tuples: (task_index, chunk_title, description, child_txt)
 
         for parent in parent_chunks:
             header = parent["header"]
@@ -147,7 +214,6 @@ class WikiIndexer:
             child_txts = chunk_text(parent_txt, max_chars=300, overlap=50)
 
             for child_txt in child_txts:
-                # 2. 청크 값 객체 생성하여 임베딩 텍스트 빌드 위임
                 chunk = Chunk(
                     file_path=rel_path,
                     chunk_index=chunk_index,
@@ -160,31 +226,68 @@ class WikiIndexer:
                     raw_frontmatter=fm,
                     content_hash=content_hash
                 )
-                # 문서 확장(Document Expansion) 수행
-                emb_text = chunk.to_embedding_text()
-                from src.core.config import DOCUMENT_EXPANSION_ENABLED
-                if DOCUMENT_EXPANSION_ENABLED and self.openai_client:
-                    expansion_txt = self._generate_expansion_text(chunk_title, description, child_txt)
-                    if expansion_txt:
-                        emb_text = f"{emb_text}\n\n[Expected Questions & Keywords]\n{expansion_txt}"
-                
-                embedding_texts.append(emb_text)
-                pending_chunks.append(chunk)
+
+                # 내용(content)이 토씨 하나 안 틀리고 똑같다면 기존 임베딩 재활용!
+                if child_txt in existing_map:
+                    c_dict = chunk.to_dict()
+                    c_dict["embedding"] = existing_map[child_txt]
+                    db_chunks.append(c_dict)
+                else:
+                    # 신규/변경된 청크만 임베딩 대상에 추가
+                    emb_text = chunk.to_embedding_text()
+                    embedding_texts.append(emb_text)
+                    pending_chunks_need_embed.append(chunk)
+
+                    from src.core.config import DOCUMENT_EXPANSION_ENABLED
+                    if DOCUMENT_EXPANSION_ENABLED and self.openai_client:
+                        # 신규 청크에 대해서만 OpenAI Document Expansion 병렬 태스크 할당
+                        task_idx = len(embedding_texts) - 1  # 새로 추가된 인덱스
+                        expansion_tasks.append((task_idx, chunk_title, description, child_txt))
+
                 chunk_index += 1
 
-        # 배치 임베딩 (100개 단위 청킹)
-        embeddings = self.embedding_service.embed_batch(embedding_texts)
+        # 신규/변경된 청크에 대해서만 하이브리드 미니배치 병렬로 OpenAI Document Expansion 호출 실행
+        if expansion_tasks:
+            # 5개씩 슬라이싱하여 미니배치 생성
+            MINI_BATCH_SIZE = 5
+            mini_batches = [expansion_tasks[i:i + MINI_BATCH_SIZE] for i in range(0, len(expansion_tasks), MINI_BATCH_SIZE)]
+            max_workers = min(len(mini_batches), 5)
+            
+            print(f"[~] Launching {len(mini_batches)} concurrent LLM mini-batch queries (size {MINI_BATCH_SIZE}) using {max_workers} threads...")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = []
+                for batch in mini_batches:
+                    # Transform elements to (task_idx, child_txt) for payload
+                    task_inputs = [(task_idx, child_txt) for task_idx, chunk_title, desc, child_txt in batch]
+                    futures.append(executor.submit(self._generate_batch_expansion, title, description, task_inputs))
+                
+                for future in as_completed(futures):
+                    try:
+                        batch_results = future.result()
+                        for idx, expansion_txt in batch_results:
+                            if expansion_txt:
+                                # Inject expansion data back into target index
+                                embedding_texts[idx] = f"{embedding_texts[idx]}\n\n[Expected Questions & Keywords]\n{expansion_txt}"
+                    except Exception as exc:
+                        print(f"[-] Document batch expansion failed: {exc}")
 
-        db_chunks = []
-        for chunk, embedding in zip(pending_chunks, embeddings):
-            c_dict = chunk.to_dict()
-            c_dict["embedding"] = embedding
-            db_chunks.append(c_dict)
+
+        # 신규/변경된 텍스트들에 대해서만 배치 임베딩 요청
+        if embedding_texts:
+            print(f"[~] Embedding {len(embedding_texts)} new/modified chunks...")
+            embeddings = self.embedding_service.embed_batch(embedding_texts)
+            
+            for chunk, embedding in zip(pending_chunks_need_embed, embeddings):
+                c_dict = chunk.to_dict()
+                c_dict["embedding"] = embedding
+                db_chunks.append(c_dict)
 
         # 배치 DB INSERT (50개 단위 청킹)
         repo.upsert_document_chunks_batch(db_chunks)
 
         return "created" if is_new else "updated"
+
+
 
     def run_indexing(self) -> Dict[str, Any]:
         """

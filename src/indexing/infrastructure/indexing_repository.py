@@ -352,3 +352,32 @@ class PostgresIndexingRepository(BaseIndexingRepository):
                     "file_path": row[2]
                 }
             return None
+
+    def get_document_chunks(self, file_path: str) -> List[Dict[str, Any]]:
+        owner_id = self._get_owner_id()
+        with self.db_manager.cursor() as cur:
+            cur.execute(
+                "SELECT chunk_index, content, embedding FROM knowledge_documents WHERE file_path = %s AND owner_id = %s ORDER BY chunk_index ASC;",
+                (file_path, owner_id)
+            )
+            rows = cur.fetchall()
+            chunks = []
+            for row in rows:
+                idx, content, emb = row
+                # Handle possible string representation of postgres vector type
+                if isinstance(emb, str):
+                    try:
+                        emb = json.loads(emb)
+                    except Exception:
+                        # Strip bracket representation if needed e.g. [0.1, 0.2]
+                        if emb.startswith('[') and emb.endswith(']'):
+                            emb = [float(x) for x in emb[1:-1].split(',')]
+                elif hasattr(emb, 'tolist'):
+                    emb = emb.tolist()
+                chunks.append({
+                    "chunk_index": idx,
+                    "content": content,
+                    "embedding": emb
+                })
+            return chunks
+
