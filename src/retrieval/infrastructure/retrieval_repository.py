@@ -23,7 +23,7 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
     def _get_owner_id(self) -> str:
         from src.core.config import current_user_config
         config = current_user_config.get() or {}
-        return config.get("api_key", "SYSTEM")
+        return config.get("user_id", "SYSTEM")
 
     def keyword_search(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
         owner_id = self._get_owner_id()

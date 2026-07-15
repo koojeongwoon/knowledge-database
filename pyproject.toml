@@ -10,7 +10,7 @@ dependencies = [
     "pgvector>=0.2.5",
     "pyyaml>=6.0.1",
     "python-dotenv>=1.0.1",
-    "openai>=1.35.0",
+    "openai>=1.40.0",
     "mcp>=0.1.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.28.0",
@@ -19,7 +19,9 @@ dependencies = [
     "boto3>=1.34.0",
     "boto3-stubs~=1.43.45",
     "redis>=5.0.0",
+    "pydantic-settings>=2.2.1",
 ]
+
 
 [build-system]
 requires = ["hatchling"]
