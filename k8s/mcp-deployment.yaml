@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: mcp-app
-          image: ghcr.io/koojeongwoon/msa/mcp-wiki-server:latest
+          image: docker.io/library/mcp-wiki-server:search-feedback-20260716-1730
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -48,7 +48,6 @@ spec:
                 secretKeyRef:
                   name: mcp-secrets
                   key: settings-encryption-key
-                  optional: true
           envFrom:
             - configMapRef:
                 name: mcp-config

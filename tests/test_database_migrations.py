@@ -48,6 +48,8 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_documents", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_indexing_jobs", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_user_settings", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_search_events", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_search_feedback", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_schema_migrations", sql)
         self.assertIn("SELECT pg_advisory_xact_lock", sql)
 

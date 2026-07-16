@@ -125,6 +125,100 @@ def cmd_migrate(_args):
     finally:
         db_manager.close()
 
+
+def cmd_evaluate_search(args):
+    from pathlib import Path
+    from src.retrieval.evaluation import evaluate_search, load_evaluation_cases
+
+    owner_token = activate_owner_context(args.owner_id)
+    db_manager = DatabaseManager()
+    try:
+        searcher = WikiSearcher(
+            db_manager=db_manager,
+            embedding_service=get_embedding_service(),
+        )
+        cases = load_evaluation_cases(args.cases)
+        report = evaluate_search(cases, searcher.search, limit=args.limit)
+        rendered = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.output:
+            Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+        print(rendered)
+    finally:
+        db_manager.close()
+        current_user_config.reset(owner_token)
+
+
+def cmd_run_blind_search(args):
+    from pathlib import Path
+    from src.retrieval.evaluation import load_blind_queries, run_blind_search
+
+    owner_token = activate_owner_context(args.owner_id)
+    db_manager = DatabaseManager()
+    try:
+        searcher = WikiSearcher(db_manager=db_manager, embedding_service=get_embedding_service())
+        report = run_blind_search(load_blind_queries(args.queries), searcher.search, args.limit)
+        rendered = json.dumps(report, ensure_ascii=False, indent=2)
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+        print(rendered)
+    finally:
+        db_manager.close()
+        current_user_config.reset(owner_token)
+
+
+def cmd_score_blind_search(args):
+    from pathlib import Path
+    from src.retrieval.evaluation import load_blind_queries, load_evaluation_cases, score_blind_predictions
+
+    predictions = json.loads(Path(args.predictions).read_text(encoding="utf-8"))
+    answers = json.loads(Path(args.answers).read_text(encoding="utf-8"))
+    gates = json.loads(Path(args.gates).read_text(encoding="utf-8"))["minimums"]
+    report = score_blind_predictions(
+        load_blind_queries(args.queries), predictions, answers,
+        load_evaluation_cases(args.development_cases), gates,
+    )
+    rendered = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output:
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
+
+
+def cmd_generate_blind_search(args):
+    from src.retrieval.blind_dataset import generate_blind_dataset
+
+    owner_token = activate_owner_context(args.owner_id)
+    db_manager = DatabaseManager()
+    try:
+        result = generate_blind_dataset(
+            db_manager, args.development_cases, args.queries_output, args.answers_output,
+            seed=args.seed, answer_cases=args.answer_cases, no_answer_cases=args.no_answer_cases,
+            exclude_answer_files=args.exclude_answers,
+            query_types=[item.strip() for item in args.query_types.split(",") if item.strip()],
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    finally:
+        db_manager.close()
+        current_user_config.reset(owner_token)
+
+
+def cmd_diagnose_search_stages(args):
+    from pathlib import Path
+    from src.retrieval.diagnostics import diagnose_retrieval_stages
+    from src.retrieval.evaluation import load_blind_queries
+
+    owner_token = activate_owner_context(args.owner_id)
+    db_manager = DatabaseManager()
+    try:
+        searcher = WikiSearcher(db_manager=db_manager, embedding_service=get_embedding_service())
+        answers = json.loads(Path(args.answers).read_text(encoding="utf-8"))
+        report = diagnose_retrieval_stages(load_blind_queries(args.queries), answers, searcher)
+        rendered = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.output:
+            Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+        print(rendered)
+    finally:
+        db_manager.close()
+        current_user_config.reset(owner_token)
+
 def main():
     parser = argparse.ArgumentParser(description="LLM-Wiki Indexer & Searcher CLI")
     subparsers = parser.add_subparsers(dest="command", required=True, help="Subcommands")
@@ -154,6 +248,46 @@ def main():
         "migrate",
         help="Apply all pending PostgreSQL schema migrations",
     )
+
+    evaluation_parser = subparsers.add_parser(
+        "evaluate-search",
+        help="Evaluate search quality against a golden query set",
+    )
+    evaluation_parser.add_argument("--owner-id", required=True)
+    evaluation_parser.add_argument("--cases", default="search_quality_development.json")
+    evaluation_parser.add_argument("--limit", type=int, default=5)
+    evaluation_parser.add_argument("--output")
+
+    blind_run_parser = subparsers.add_parser("run-blind-search", help="Run blind queries without access to answers")
+    blind_run_parser.add_argument("--owner-id", required=True)
+    blind_run_parser.add_argument("--queries", required=True)
+    blind_run_parser.add_argument("--limit", type=int, default=5)
+    blind_run_parser.add_argument("--output", required=True)
+
+    blind_score_parser = subparsers.add_parser("score-blind-search", help="Score frozen blind predictions")
+    blind_score_parser.add_argument("--queries", required=True)
+    blind_score_parser.add_argument("--predictions", required=True)
+    blind_score_parser.add_argument("--answers", required=True)
+    blind_score_parser.add_argument("--development-cases", default="search_quality_development.json")
+    blind_score_parser.add_argument("--gates", default="search_quality_gates.json")
+    blind_score_parser.add_argument("--output")
+
+    blind_generate_parser = subparsers.add_parser("generate-blind-search", help="Generate a private prospective blind holdout set")
+    blind_generate_parser.add_argument("--owner-id", required=True)
+    blind_generate_parser.add_argument("--development-cases", default="search_quality_development.json")
+    blind_generate_parser.add_argument("--queries-output", required=True)
+    blind_generate_parser.add_argument("--answers-output", required=True)
+    blind_generate_parser.add_argument("--seed", default="blind-v1")
+    blind_generate_parser.add_argument("--answer-cases", type=int, default=40)
+    blind_generate_parser.add_argument("--no-answer-cases", type=int, default=10)
+    blind_generate_parser.add_argument("--exclude-answers", action="append", default=[])
+    blind_generate_parser.add_argument("--query-types", default="exact,semantic,cross-language,acronym,mixed-language")
+
+    diagnose_parser = subparsers.add_parser("diagnose-search-stages", help="Trace expected documents through retrieval stages")
+    diagnose_parser.add_argument("--owner-id", required=True)
+    diagnose_parser.add_argument("--queries", required=True)
+    diagnose_parser.add_argument("--answers", required=True)
+    diagnose_parser.add_argument("--output")
     
     args = parser.parse_args()
     
@@ -165,6 +299,16 @@ def main():
         cmd_retry_indexing(args)
     elif args.command == "migrate":
         cmd_migrate(args)
+    elif args.command == "evaluate-search":
+        cmd_evaluate_search(args)
+    elif args.command == "run-blind-search":
+        cmd_run_blind_search(args)
+    elif args.command == "score-blind-search":
+        cmd_score_blind_search(args)
+    elif args.command == "generate-blind-search":
+        cmd_generate_blind_search(args)
+    elif args.command == "diagnose-search-stages":
+        cmd_diagnose_search_stages(args)
 
 if __name__ == "__main__":
     main()

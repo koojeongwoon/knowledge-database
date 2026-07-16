@@ -87,7 +87,11 @@ class Chunk:
 
     def to_dict(self) -> Dict[str, Any]:
         """딕셔너리 직렬화 변환"""
-        visibility = self.raw_frontmatter.get("visibility", "public") if isinstance(self.raw_frontmatter, dict) else "public"
+        normalized_path = self.file_path.replace("\\", "/").lstrip("/")
+        if normalized_path.startswith("qa/"):
+            visibility = "private"
+        else:
+            visibility = self.raw_frontmatter.get("visibility", "public") if isinstance(self.raw_frontmatter, dict) else "public"
         if visibility not in ("public", "private"):
             visibility = "public"
         return {

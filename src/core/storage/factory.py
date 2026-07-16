@@ -27,11 +27,7 @@ def StorageManager(user_id: str = None, db_manager = None):
         raise ConnectionError("S3/R2 저장소를 선택하려면 owner_id가 필요합니다.")
     cache_key = user_id
     
-    # 2. 컨텍스트 세션 토큰이 존재하고 캐싱되어 있다면 즉시 반환
-    if cache_key and cache_key in _storage_instances:
-        return _storage_instances[cache_key]
-        
-    # 3. 컨텍스트 설정에 스토리지 정보가 포함된 경우 동적 인스턴스화
+    # 2. 컨텍스트 설정에 스토리지 정보가 포함된 경우 동적 인스턴스화
     if storage_cfg:
         storage_type = storage_cfg.get("storage_type")
         if storage_type in ("s3", "r2"):
@@ -43,6 +39,11 @@ def StorageManager(user_id: str = None, db_manager = None):
             
             if not all([endpoint, access_key, secret_key, bucket]):
                 raise ConnectionError("R2/S3 스토리지 필수 설정 필드가 누락되었습니다.")
+
+            fingerprint = (storage_type, endpoint, access_key, secret_key, bucket)
+            cached = _storage_instances.get(cache_key)
+            if cached and cached[0] == fingerprint:
+                return cached[1]
                 
             manager = S3StorageManager(
                 endpoint_url=endpoint,
@@ -51,6 +52,6 @@ def StorageManager(user_id: str = None, db_manager = None):
                 bucket_name=bucket
             )
             if cache_key:
-                _storage_instances[cache_key] = manager
+                _storage_instances[cache_key] = (fingerprint, manager)
             return manager
     raise ConnectionError("사용자의 S3/R2 저장소가 DB에 설정되지 않았습니다.")

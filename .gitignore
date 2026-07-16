@@ -83,3 +83,9 @@ tools/
 
 # Kubernetes Infrastructure
 k8s-infra/
+# Private blind-search evaluation artifacts (never commit answer keys or predictions)
+tests/search_quality_blind_queries.json
+tests/search_quality_blind_answers.json
+tests/search_quality_blind_predictions.json
+tests/search_quality_blind_report.json
+tests/search_quality_development_v2_*.json

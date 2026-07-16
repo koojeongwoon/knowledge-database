@@ -215,6 +215,8 @@ class PostgresIndexingRepository(BaseIndexingRepository):
                         # Strip bracket representation if needed e.g. [0.1, 0.2]
                         if emb.startswith('[') and emb.endswith(']'):
                             emb = [float(x) for x in emb[1:-1].split(',')]
+                elif hasattr(emb, 'to_list'):
+                    emb = emb.to_list()
                 elif hasattr(emb, 'tolist'):
                     emb = emb.tolist()
                 chunks.append({

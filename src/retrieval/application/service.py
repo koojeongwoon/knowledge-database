@@ -1,10 +1,24 @@
 import math
 from typing import List, Dict, Any
 
-from src.core.config import SIMILARITY_THRESHOLD, RERANKER_ENABLED, RERANKER_MODEL, RRF_K
+from src.core.config import (
+    CONFIDENCE_FILTER_ENABLED,
+    CONFIDENCE_SPARSE_MARGIN,
+    CONFIDENCE_WEAK_LEXICAL,
+    CONFIDENCE_WEAK_VECTOR,
+    GRAPH_CONTEXT_ENABLED,
+    GRAPH_CONTEXT_LIMIT,
+    GRAPH_SEED_LEXICAL_THRESHOLD,
+    GRAPH_SEED_VECTOR_THRESHOLD,
+    LEXICAL_RANK_THRESHOLD,
+    RERANKER_ENABLED,
+    RERANKER_MODEL,
+    RRF_K,
+    SIMILARITY_THRESHOLD,
+)
 from src.core.database.factory import DatabaseManager
 from src.indexing.domain.embedding import BaseEmbeddingService
-from src.retrieval.domain.model import Query, RankFusion
+from src.retrieval.domain.model import GraphExpansionPolicy, Query, RankFusion, RetrievalConfidence
 from src.retrieval.infrastructure.repository import RetrievalRepository
 
 
@@ -67,7 +81,6 @@ class WikiSearcher:
         clean_keywords = query_obj.get_clean_keywords()
         search_query_text = " ".join(clean_keywords) if clean_keywords else query_obj.text
         keyword_results = self.repository.keyword_search(search_query_text, limit=candidate_limit)
-
         if not vector_results and not keyword_results:
             return []
 
@@ -79,23 +92,8 @@ class WikiSearcher:
             rerank_pool_size = max(limit * 3, 15)
             fused = self._rerank(query_obj.text, fused[:rerank_pool_size], top_k=limit * 2)
             score_key = "reranker_score"
-            
-            # 리랭커 점수에 citation boost 적용
-            for doc in fused:
-                citation_count = doc.get("citation_count", 0)
-                if citation_count > 0:
-                    boost = 1.0 + 0.05 * math.log1p(citation_count)
-                    doc["reranker_score"] = min(doc["reranker_score"] * boost, 1.0)
         else:
             score_key = "rrf_score"
-            # RRF 및 similarity 점수에 citation boost 적용
-            for doc in fused:
-                citation_count = doc.get("citation_count", 0)
-                if citation_count > 0:
-                    boost = 1.0 + 0.05 * math.log1p(citation_count)
-                    doc["rrf_score"] = doc["rrf_score"] * boost
-                    if "similarity" in doc:
-                        doc["similarity"] = min(doc["similarity"] * boost, 1.0)
 
         # 5. 임계치 필터링 — 파이프라인 최종 점수 기준
         filtered = []
@@ -105,25 +103,31 @@ class WikiSearcher:
                 if doc.get(score_key, 0) >= SIMILARITY_THRESHOLD:
                     filtered.append(doc)
             else:
-                # 리랭커 비활성화 시: 보정된 RRF 필터링
-                # 키워드 매칭이 전혀 없이 벡터 단독 매칭되었으나, 절대 코사인 유사도가 임계치 미만인 경우 제외
-                sources = doc.get("search_sources", [])
-                if "keyword" not in sources:
-                    raw_sim = doc.get("similarity", 0.0)
-                    if raw_sim < SIMILARITY_THRESHOLD:
-                        continue
-                filtered.append(doc)
+                # RRF는 순위 결합에만 사용하고, 원시 신호 중 하나가 절대 기준을
+                # 통과한 경우에만 관련 문서로 인정합니다.
+                vector_pass = doc.get("vector_similarity", 0.0) >= SIMILARITY_THRESHOLD
+                lexical_pass = doc.get("lexical_rank", 0.0) >= LEXICAL_RANK_THRESHOLD
+                if vector_pass or lexical_pass:
+                    filtered.append(doc)
+
+        if CONFIDENCE_FILTER_ENABLED and RetrievalConfidence.should_reject(
+            filtered,
+            weak_vector=CONFIDENCE_WEAK_VECTOR,
+            weak_lexical=CONFIDENCE_WEAK_LEXICAL,
+            sparse_margin=CONFIDENCE_SPARSE_MARGIN,
+        ):
+            return []
 
         # 6. Parent-Child RAG: 중복 제거 및 자식 청크 매칭 결과를 부모 문맥으로 교체하여 반환
         retrieved_docs = []
         file_paths = []
-        seen_parents = set()
+        seen_files = set()
 
         for doc in filtered:
-            parent_key = (doc["file_path"], doc["title"])
-            if parent_key in seen_parents:
+            # 여러 청크가 같은 부모 문서 전체를 반환하므로 파일당 한 번만 노출합니다.
+            if doc["file_path"] in seen_files:
                 continue
-            seen_parents.add(parent_key)
+            seen_files.add(doc["file_path"])
 
             file_paths.append(doc["file_path"])
             retrieved_docs.append({
@@ -134,7 +138,11 @@ class WikiSearcher:
                 "tags": doc.get("tags", []),
                 # 부모 문맥 전달 (더 넓은 컨텍스트)
                 "content": doc.get("parent_content", doc["content"]),
-                "similarity": doc.get(score_key, 0),
+                "similarity": doc.get("vector_similarity", 0.0),
+                "vector_similarity": doc.get("vector_similarity", 0.0),
+                "lexical_rank": doc.get("lexical_rank", 0.0),
+                "rrf_score": doc.get("rrf_score", 0.0),
+                "retrieval_kind": "direct",
                 "raw_frontmatter": doc.get("raw_frontmatter"),  # frontmatter 정보 포함
                 "citation_count": doc.get("citation_count", 0)  # [추가] 인용 횟수 전달
             })
@@ -145,28 +153,39 @@ class WikiSearcher:
         if file_paths:
             self.repository.increment_citation_count(file_paths)
 
-        # 7. Graph-link RAG: 매칭된 문서들과 위키링크로 1촌 연결된 연관 개념 확장
+        # 7. Graph-link RAG: direct 순위/슬롯과 분리된 보조 컨텍스트로만 제공
         try:
-            connected_docs = self.repository.get_connected_documents(file_paths, limit=3)
+            seed_paths = GraphExpansionPolicy.strong_seed_paths(
+                retrieved_docs,
+                vector_threshold=GRAPH_SEED_VECTOR_THRESHOLD,
+                lexical_threshold=GRAPH_SEED_LEXICAL_THRESHOLD,
+            ) if GRAPH_CONTEXT_ENABLED else []
+            connected_docs = (
+                self.repository.get_connected_documents(seed_paths, limit=GRAPH_CONTEXT_LIMIT)
+                if seed_paths and GRAPH_CONTEXT_LIMIT > 0
+                else []
+            )
+            graph_context = []
             for doc in connected_docs:
-                # 중복 반환 방지
                 if any(r["file_path"] == doc["file_path"] for r in retrieved_docs):
                     continue
 
-                # 4대 신호 및 수동 지정 연결 강도(edge_weight)를 유사도에 동적 반영
-                # 기본 기준값인 0.85에 edge_weight 가중치를 곱해 정합성 있게 계산
                 edge_weight = doc.get("edge_weight", 1.0)
-                dynamic_similarity = min(0.8500 * edge_weight, 0.9900)
-
-                retrieved_docs.append({
+                graph_context.append({
                     "file_path": doc["file_path"],
-                    "doc_type": f"{doc['doc_type']} (Graph Extension)",
+                    "doc_type": f"{doc['doc_type']} (Graph Context)",
                     "title": doc["title"],
                     "description": doc.get("description", ""),
                     "tags": doc.get("tags", []),
                     "content": doc.get("parent_content", doc["content"]),
-                    "similarity": dynamic_similarity,
+                    "similarity": 0.0,
+                    "graph_weight": edge_weight,
+                    "graph_sources": doc.get("graph_sources", []),
+                    "graph_target": doc.get("graph_target", ""),
+                    "retrieval_kind": "graph",
                 })
+            if graph_context:
+                retrieved_docs[0]["graph_context"] = graph_context
         except Exception as ex:
             print(f"Warning: Failed to expand graph context: {ex}")
 

@@ -13,11 +13,43 @@ else:
 
 from src.api.dto import ToolResponse
 from src.api.exceptions import WikiBaseException
+from src.core.config import current_user_config
 
 logger = logging.getLogger("knowledge_base")
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+
+def with_fresh_user_settings(func: Callable[P, R]) -> Callable[P, R]:
+    """도구 실행마다 캐시된 최신 설정을 주입하고, 캐시 miss일 때만 DB를 조회한다."""
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        base_config = current_user_config.get() or {}
+        owner_id = base_config.get("user_id", "SYSTEM")
+        if not owner_id or owner_id == "SYSTEM":
+            return func(*args, **kwargs)
+
+        from src.settings.service import UserSettingsService
+
+        service = UserSettingsService()
+        try:
+            stored_config = service.get_runtime_config(owner_id)
+        finally:
+            service.db_manager.close()
+
+        fresh_config = {
+            "api_key": base_config.get("api_key"),
+            "user_id": owner_id,
+            **stored_config,
+        }
+        context_token = current_user_config.set(fresh_config)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            current_user_config.reset(context_token)
+
+    return wrapper
 
 def tool_wrapper(func: Callable[P, R]) -> Callable[P, str]:
     """지식베이스 도구 실행 결과를 일관된 ToolResponse JSON String 규격으로 변환하는 통합 데코레이터"""

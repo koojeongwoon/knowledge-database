@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "split": "blind",
+  "cases": [
+    {
+      "id": "blind-example-answer",
+      "query": "독립 평가자가 작성한 질문",
+      "query_type": "semantic"
+    },
+    {
+      "id": "blind-example-no-answer",
+      "query": "지식베이스에 답이 없는 질문",
+      "query_type": "no-answer"
+    }
+  ]
+}

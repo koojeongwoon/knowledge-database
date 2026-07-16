@@ -1,7 +1,8 @@
 from pathlib import Path
+import logging
 import os
 import time
-from typing import Optional
+from typing import List, Optional
 
 import jwt
 from fastapi import Cookie, FastAPI, Header, HTTPException, status
@@ -12,6 +13,7 @@ from src.api.middleware import _validate_api_key_cached
 from src.api_keys.auth import verify_auth_token
 from src.api_keys.service import ApiKeyService
 from src.settings.service import SettingsEncryptionError, UserSettingsService
+from src.retrieval.feedback import SearchFeedbackService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 settings_app = FastAPI(title="LLM-Wiki Settings", docs_url=None, redoc_url=None)
@@ -20,6 +22,7 @@ LOGIN_URL = os.getenv(
     "KNOWLEDGE_LOGIN_URL",
     "https://auth.snappytory.com/portal/tenants/knowledge/login",
 )
+logger = logging.getLogger("settings_auth")
 
 
 class SettingsPayload(BaseModel):
@@ -38,6 +41,14 @@ class CreateApiKeyPayload(BaseModel):
 
 class SessionPayload(BaseModel):
     access_token: str = Field(min_length=20, max_length=8192)
+
+
+class SearchFeedbackPayload(BaseModel):
+    relevant_paths: List[str] = Field(default_factory=list, max_length=20)
+    irrelevant_paths: List[str] = Field(default_factory=list, max_length=20)
+    expected_no_answer: bool = False
+    missing_answer_path: Optional[str] = Field(default=None, max_length=512)
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
 
 async def _authenticated_user(authorization: Optional[str], session_token: Optional[str] = None) -> str:
@@ -107,6 +118,8 @@ def create_session(payload: SessionPayload):
     try:
         claims = verify_auth_token(payload.access_token)
     except jwt.PyJWTError as exc:
+        # 토큰이나 claim은 기록하지 않고 실패 유형만 남긴다.
+        logger.warning("Login token verification failed: error_type=%s", type(exc).__name__)
         raise HTTPException(status_code=401, detail="유효하지 않은 로그인 토큰입니다.") from exc
     max_age = max(1, min(int(claims.get("exp", 0)) - int(time.time()), 86400))
     response = JSONResponse({"success": True})
@@ -199,6 +212,39 @@ def revoke_api_key(key_id: str, authorization: Optional[str] = Header(default=No
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@settings_app.get("/api/search-feedback/events")
+async def recent_search_events(
+    limit: int = 30,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    service = SearchFeedbackService()
+    try:
+        return {"events": service.list_recent(owner_id, limit)}
+    finally:
+        service.db_manager.close()
+
+
+@settings_app.put("/api/search-feedback/{search_id}")
+async def save_search_feedback(
+    search_id: str,
+    payload: SearchFeedbackPayload,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    service = SearchFeedbackService()
+    try:
+        return service.submit(owner_id, search_id, **payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        service.db_manager.close()
+
+
 class SettingsPathDispatcher:
     """웹 설정 경로만 FastAPI로 보내고 나머지는 기존 MCP 앱에 보냅니다."""
     def __init__(self, web_app, mcp_app):
@@ -221,6 +267,7 @@ class SettingsPathDispatcher:
         if mcp_host and host == mcp_host and (
             path == "/settings" or path.startswith("/settings/") or
             path.startswith("/api/settings") or path.startswith("/api/keys") or
+            path.startswith("/api/search-feedback") or
             path in ("/callback", "/login", "/logout", "/api/session")
         ):
             await self._not_found(scope, receive, send)
@@ -229,6 +276,7 @@ class SettingsPathDispatcher:
         web_path = (path in ("/", "/health", "/settings", "/callback", "/login", "/logout", "/api/session") or
                     path.startswith("/settings/") or path.startswith("/api/settings"))
         web_path = web_path or path.startswith("/api/keys")
+        web_path = web_path or path.startswith("/api/search-feedback")
         await (self.web_app if web_path else self.mcp_app)(scope, receive, send)
 
     async def _not_found(self, scope, receive, send):

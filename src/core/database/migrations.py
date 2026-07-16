@@ -190,6 +190,43 @@ def _default_to_s3_storage(cur) -> None:
     """)
 
 
+def _create_search_feedback(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_search_events (
+            search_id UUID PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            query_text TEXT NOT NULL,
+            query_hash CHAR(64) NOT NULL,
+            returned_results JSONB NOT NULL DEFAULT '[]'::jsonb,
+            result_count INT NOT NULL DEFAULT 0,
+            pipeline_version VARCHAR(100) NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_search_events_owner_created_idx
+        ON knowledge_search_events (owner_id, created_at DESC);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_search_feedback (
+            id BIGSERIAL PRIMARY KEY,
+            search_id UUID NOT NULL REFERENCES knowledge_search_events(search_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            relevant_paths TEXT[] NOT NULL DEFAULT '{}',
+            irrelevant_paths TEXT[] NOT NULL DEFAULT '{}',
+            expected_no_answer BOOLEAN NOT NULL DEFAULT FALSE,
+            missing_answer_path TEXT,
+            notes TEXT,
+            labeled_by VARCHAR(50) NOT NULL,
+            labeled_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_owner_search_feedback UNIQUE (owner_id, search_id),
+            CONSTRAINT ck_feedback_no_answer CHECK (
+                NOT expected_no_answer OR cardinality(relevant_paths) = 0
+            )
+        );
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -198,6 +235,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(5, "create_search_indexes", _create_search_indexes),
     Migration(6, "require_remote_user_storage", _require_remote_user_storage),
     Migration(7, "default_to_s3_storage", _default_to_s3_storage),
+    Migration(8, "create_search_feedback", _create_search_feedback),
 )
 
 

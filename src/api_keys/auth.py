@@ -10,9 +10,28 @@ KNOWLEDGE_CLIENT_ID = os.getenv("KNOWLEDGE_CLIENT_ID", "knowledge-service")
 KNOWLEDGE_TENANT_ID = os.getenv("KNOWLEDGE_TENANT_ID", "knowledge")
 
 
+class KnowledgeClientMismatchError(jwt.InvalidTokenError):
+    pass
+
+
+class KnowledgeTenantMismatchError(jwt.InvalidTokenError):
+    pass
+
+
+class MissingTokenSubjectError(jwt.InvalidTokenError):
+    pass
+
+
 @lru_cache(maxsize=1)
 def _jwk_client() -> PyJWKClient:
-    return PyJWKClient(f"{AUTH_SERVER_URL}/oauth2/jwks")
+    return PyJWKClient(
+        f"{AUTH_SERVER_URL}/oauth2/jwks",
+        headers={
+            "User-Agent": "llm-wiki-jwks/1.0",
+            "Accept": "application/json",
+        },
+        timeout=10,
+    )
 
 
 def verify_auth_token(token: str) -> dict:
@@ -26,9 +45,9 @@ def verify_auth_token(token: str) -> dict:
         options={"verify_aud": False},
     )
     if claims.get("client_id") != KNOWLEDGE_CLIENT_ID:
-        raise jwt.InvalidTokenError("Token was not issued for the knowledge service")
+        raise KnowledgeClientMismatchError("Token was not issued for the knowledge service")
     if claims.get("tenant_id") != KNOWLEDGE_TENANT_ID:
-        raise jwt.InvalidTokenError("Token does not belong to the knowledge tenant")
+        raise KnowledgeTenantMismatchError("Token does not belong to the knowledge tenant")
     if not claims.get("sub"):
-        raise jwt.InvalidTokenError("Token subject is missing")
+        raise MissingTokenSubjectError("Token subject is missing")
     return claims

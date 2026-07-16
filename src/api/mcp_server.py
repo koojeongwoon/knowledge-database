@@ -11,6 +11,7 @@ from src.api.agent_tool import (
     retrieve_wiki_knowledge,
     commit_wiki_knowledge,
     run_wiki_indexing,
+    submit_wiki_search_feedback,
 )
 from src.api.middleware import MCPAuthMiddleware
 from src.core.database.factory import DatabaseManager
@@ -45,6 +46,26 @@ def search_wiki_knowledge(query: str, limit: int = 5) -> str:
     관련성이 높은 마크다운 지식 조각 및 인용 정보를 반환합니다.
     """
     return retrieve_wiki_knowledge(query, limit)
+
+
+@mcp.tool(name="submit_search_feedback")
+def submit_search_feedback(
+    search_id: str,
+    relevant_paths: Optional[List[str]] = None,
+    irrelevant_paths: Optional[List[str]] = None,
+    expected_no_answer: bool = False,
+    missing_answer_path: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """검색 결과에 대해 사용자가 직접 판정한 정답/오답/no-answer 라벨을 저장합니다."""
+    return cast(str, submit_wiki_search_feedback(
+        search_id=search_id,
+        relevant_paths=relevant_paths or [],
+        irrelevant_paths=irrelevant_paths or [],
+        expected_no_answer=expected_no_answer,
+        missing_answer_path=missing_answer_path,
+        notes=notes,
+    ))
 
 @mcp.tool(name="commit_new_knowledge")
 def commit_new_knowledge(

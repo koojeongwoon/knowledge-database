@@ -1,11 +1,22 @@
 import base64
 import hashlib
 import os
+import threading
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from src.core.database.factory import DatabaseManager
+
+
+_runtime_config_cache: Dict[str, Dict[str, Any]] = {}
+_runtime_config_cache_lock = threading.Lock()
+
+
+def invalidate_user_settings_cache(owner_id: str) -> None:
+    with _runtime_config_cache_lock:
+        _runtime_config_cache.pop(owner_id, None)
 
 
 class SettingsEncryptionError(RuntimeError):
@@ -73,6 +84,7 @@ class UserSettingsService:
             """, (owner_id, openai_key, values.get("storage_type", "s3"),
                   values.get("s3_endpoint_url") or None, values.get("s3_bucket_name") or None,
                   access_key, secret_key))
+        invalidate_user_settings_cache(owner_id)
         return self.get_public(owner_id)
 
     def get_public(self, owner_id: str) -> Dict[str, Any]:
@@ -89,12 +101,20 @@ class UserSettingsService:
                 "updated_at": row[6].isoformat() if row[6] else None}
 
     def get_runtime_config(self, owner_id: str) -> Dict[str, Any]:
+        with _runtime_config_cache_lock:
+            cached = _runtime_config_cache.get(owner_id)
+        if cached is not None:
+            return deepcopy(cached)
+
         row = self._get_row(owner_id)
         if not row:
             return {}
-        return {"openai_api_key": self._decrypt(row[0]), "storage": {
+        config = {"openai_api_key": self._decrypt(row[0]), "storage": {
             "storage_type": "s3" if row[1] == "r2" else row[1],
             "s3_endpoint_url": row[2], "s3_bucket_name": row[3],
             "s3_access_key_id": self._decrypt(row[4]),
             "s3_secret_access_key": self._decrypt(row[5]),
         }}
+        with _runtime_config_cache_lock:
+            _runtime_config_cache[owner_id] = deepcopy(config)
+        return config

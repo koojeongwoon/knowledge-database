@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     # 최종 검색 결과 유사도 임계치
     similarity_threshold: float = Field(default=0.35, validation_alias="SIMILARITY_THRESHOLD")
 
+    # PostgreSQL FTS 원시 관련도(ts_rank) 임계치
+    lexical_rank_threshold: float = Field(default=0.02, validation_alias="LEXICAL_RANK_THRESHOLD")
+    confidence_filter_enabled: bool = Field(default=False, validation_alias="CONFIDENCE_FILTER_ENABLED")
+    confidence_weak_vector: float = Field(default=0.38, validation_alias="CONFIDENCE_WEAK_VECTOR")
+    confidence_weak_lexical: float = Field(default=0.015, validation_alias="CONFIDENCE_WEAK_LEXICAL")
+    confidence_sparse_margin: float = Field(default=0.5, validation_alias="CONFIDENCE_SPARSE_MARGIN")
+    graph_context_enabled: bool = Field(default=False, validation_alias="GRAPH_CONTEXT_ENABLED")
+    graph_seed_vector_threshold: float = Field(default=0.5, validation_alias="GRAPH_SEED_VECTOR_THRESHOLD")
+    graph_seed_lexical_threshold: float = Field(default=0.05, validation_alias="GRAPH_SEED_LEXICAL_THRESHOLD")
+    graph_context_limit: int = Field(default=2, validation_alias="GRAPH_CONTEXT_LIMIT")
+
     # Cross-Encoder 리랭커 설정 (비활성 시 RRF 결과를 그대로 사용)
     reranker_enabled: bool = Field(default=False, validation_alias="RERANKER_ENABLED")
     reranker_model: str = Field(default="BAAI/bge-reranker-v2-m3", validation_alias="RERANKER_MODEL")
@@ -85,6 +96,15 @@ DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NA
 
 RRF_K = settings.rrf_k
 SIMILARITY_THRESHOLD = settings.similarity_threshold
+LEXICAL_RANK_THRESHOLD = settings.lexical_rank_threshold
+CONFIDENCE_FILTER_ENABLED = settings.confidence_filter_enabled
+CONFIDENCE_WEAK_VECTOR = settings.confidence_weak_vector
+CONFIDENCE_WEAK_LEXICAL = settings.confidence_weak_lexical
+CONFIDENCE_SPARSE_MARGIN = settings.confidence_sparse_margin
+GRAPH_CONTEXT_ENABLED = settings.graph_context_enabled
+GRAPH_SEED_VECTOR_THRESHOLD = settings.graph_seed_vector_threshold
+GRAPH_SEED_LEXICAL_THRESHOLD = settings.graph_seed_lexical_threshold
+GRAPH_CONTEXT_LIMIT = settings.graph_context_limit
 RERANKER_ENABLED = settings.reranker_enabled
 RERANKER_MODEL = settings.reranker_model
 DOCUMENT_EXPANSION_ENABLED = settings.document_expansion_enabled

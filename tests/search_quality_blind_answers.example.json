@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "query_fingerprint": "run the fingerprint helper for the real query set",
+  "answers": [
+    {
+      "id": "blind-example-answer",
+      "expected_paths": ["qa/path-selected-by-independent-reviewer.md"]
+    },
+    {
+      "id": "blind-example-no-answer",
+      "expected_paths": [],
+      "expected_no_answer": true
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "split": "development",
+  "cases": [
+    {
+      "id": "exact-herdr",
+      "query": "Herdr 터미널 멀티플렉서 모바일 접근",
+      "query_type": "exact",
+      "expected_paths": ["qa/2026-07-16/0223-herdr-터미널-멀티플렉서-모바일-접근/0223-herdr-터미널-멀티플렉서-모바일-접근.md"]
+    },
+    {
+      "id": "semantic-herdr",
+      "query": "휴대폰에서 SSH 작업을 끊김 없이 이어서 보는 터미널 도구",
+      "query_type": "semantic",
+      "expected_paths": ["qa/2026-07-16/0223-herdr-터미널-멀티플렉서-모바일-접근/0223-herdr-터미널-멀티플렉서-모바일-접근.md"]
+    },
+    {
+      "id": "mixed-malware",
+      "query": "멀웨어 스캐너 fail safe 판정 로직",
+      "query_type": "mixed-language",
+      "expected_paths": ["qa/2026-07-16/0136-malware-scanner-phase-0-판정-안전성-구현/0136-malware-scanner-phase-0-판정-안전성-구현.md", "topics/Development/malware-scanner.md"]
+    },
+    {
+      "id": "english-anemic-domain",
+      "query": "How to improve an anemic domain model with domain services",
+      "query_type": "cross-language",
+      "expected_paths": ["qa/2026-06-16/0455-스프링-빈약한-도메인-모델-개선과-도메인-서비스-활용/0455-스프링-빈약한-도메인-모델-개선과-도메인-서비스-활용.md"]
+    },
+    {
+      "id": "acronym-msa",
+      "query": "MSA에서 단일 서비스 내부를 헥사고날 구조로 설계하는 법",
+      "query_type": "acronym",
+      "expected_paths": ["qa/2026-06-17/0403-마이크로서비스ms-단일-프로젝트-내부-설계-베스트-프랙티스/0403-마이크로서비스ms-단일-프로젝트-내부-설계-베스트-프랙티스.md"]
+    },
+    {
+      "id": "exact-indexing",
+      "query": "LLM-Wiki 아키텍처 및 인덱싱 설계",
+      "query_type": "exact",
+      "expected_paths": ["qa/2026-06-16/1022-llm-wiki-인덱싱/1022-llm-wiki-인덱싱.md"]
+    },
+    {
+      "id": "no-answer-penguin",
+      "query": "남극 황제펭귄의 2024년 개체수와 주요 번식지 좌표",
+      "query_type": "no-answer",
+      "expected_paths": [],
+      "expected_no_answer": true
+    },
+    {
+      "id": "no-answer-chemistry",
+      "query": "희토류 란타넘의 결정구조와 800도 열팽창 계수",
+      "query_type": "no-answer",
+      "expected_paths": [],
+      "expected_no_answer": true
+    }
+  ]
+}

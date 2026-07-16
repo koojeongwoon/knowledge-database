@@ -33,6 +33,12 @@
       <div id="message" class="message" role="status" aria-live="polite"></div>
       <button id="save-button" class="primary" type="submit">설정 저장</button>
     </form>
+    <section class="card">
+      <div class="section-heading"><div><span>04</span><h2>검색 결과 검수</h2></div><button id="refresh-feedback" class="secondary" type="button">새로고침</button></div>
+      <p class="hint">최근 검색에서 정답 문서와 오답 문서를 직접 표시합니다. 명시적으로 저장한 판정만 품질 평가 데이터로 사용됩니다.</p>
+      <div id="feedback-message" class="message" role="status" aria-live="polite"></div>
+      <div id="search-events" class="review-list"></div>
+    </section>
   </main>
   <script src="/settings/assets/settings.js" defer></script>
 </body>

@@ -96,9 +96,10 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         owner_id = self._get_owner_id()
         with self.db_manager.cursor() as cur:
             query_edges = """
-            SELECT target_topic, MAX(weight) as weight
+            SELECT target_topic, MAX(weight) as weight, ARRAY_AGG(DISTINCT source_path) AS source_paths
             FROM knowledge_edges 
-            WHERE source_path = ANY(%s) AND owner_id = %s
+            WHERE source_path = ANY(%s)
+              AND ((visibility = 'public') OR (visibility = 'private' AND owner_id = %s))
             GROUP BY target_topic
             ORDER BY weight DESC
             LIMIT %s;
@@ -110,17 +111,21 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
                 return []
                 
             topic_to_weight = {row[0].lower(): row[1] for row in edges_rows}
+            topic_to_sources = {row[0].lower(): row[2] for row in edges_rows}
             topics_lower = list(topic_to_weight.keys())
+            path_patterns = [f"%/{topic}.md" for topic in topics_lower]
                 
             query_docs = """
             SELECT file_path, doc_type, title, description, tags, content, parent_content
             FROM knowledge_documents
-            WHERE chunk_index = 0 AND owner_id = %s AND (
+            WHERE chunk_index = 0
+              AND ((visibility = 'public') OR (visibility = 'private' AND owner_id = %s))
+              AND (
                 LOWER(title) = ANY(%s) OR
-                SPLIT_PART(SPLIT_PART(file_path, '/', 2), '.', 1) = ANY(%s)
+                LOWER(file_path) LIKE ANY(%s)
             );
             """
-            cur.execute(query_docs, (owner_id, topics_lower, topics_lower))
+            cur.execute(query_docs, (owner_id, topics_lower, path_patterns))
             
             columns = [col[0] for col in cur.description]
             results = []
@@ -136,6 +141,9 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
                     weight = topic_to_weight[t_filename]
                     
                 doc["edge_weight"] = weight
+                matched_topic = t_title if t_title in topic_to_weight else t_filename
+                doc["graph_target"] = matched_topic
+                doc["graph_sources"] = topic_to_sources.get(matched_topic, [])
                 results.append(doc)
             return results
 
