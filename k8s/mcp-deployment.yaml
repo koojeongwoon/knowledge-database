@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: mcp-app
-          image: docker.io/library/mcp-wiki-server:search-feedback-20260716-1730
+          image: docker.io/library/mcp-wiki-server:search-graph-20260717-0040
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -34,6 +34,11 @@ spec:
                 secretKeyRef:
                   name: mcp-secrets
                   key: redis-password
+            - name: REDIS_CACHE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-secrets
+                  key: redis-cache-password
             # 2. 리랭커 모델 런타임 캐시 (지식 저장소와 무관한 임시 데이터)
             - name: HF_HOME
               value: /tmp/huggingface
@@ -48,6 +53,11 @@ spec:
                 secretKeyRef:
                   name: mcp-secrets
                   key: settings-encryption-key
+            - name: KNOWLEDGE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-secrets
+                  key: knowledge-client-secret
           envFrom:
             - configMapRef:
                 name: mcp-config

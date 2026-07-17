@@ -1,7 +1,6 @@
 import os
-import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -12,7 +11,19 @@ from src.api_keys.auth import _jwk_client
 
 class SettingsWebTests(unittest.TestCase):
     def setUp(self):
+        self.store = Mock()
+        self.store.session_ttl = 2592000
+        self.store.begin_login.return_value = ("state-value", "verifier", "challenge-value")
+        self.store.oauth_client.authorization_url.return_value = "https://auth.snappytory.com/oauth2/authorize?state=state-value"
+        self.store.resolve = AsyncMock()
+        self.store.oauth_client.exchange_code = AsyncMock(return_value={"access_token": "access", "refresh_token": "refresh"})
+        self.store.create.return_value = "opaque-session-id"
+        self.store_patcher = patch("src.settings.web.session_store", return_value=self.store)
+        self.store_patcher.start()
         self.client = TestClient(settings_app)
+
+    def tearDown(self):
+        self.store_patcher.stop()
 
     def test_public_routes_are_available_without_redirecting_root(self):
         root = self.client.get("/")
@@ -21,10 +32,11 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(self.client.get("/health").status_code, 200)
         page = self.client.get("/settings", follow_redirects=False)
         self.assertEqual(page.status_code, 302)
-        self.assertIn("auth.snappytory.com", page.headers["location"])
+        self.assertEqual(page.headers["location"], "/login")
+        login = self.client.get("/login", follow_redirects=False)
+        self.assertIn("/oauth2/authorize", login.headers["location"])
         callback = self.client.get("/callback")
-        self.assertEqual(callback.status_code, 200)
-        self.assertIn("access_token", callback.text)
+        self.assertEqual(callback.status_code, 400)
 
     def test_jwks_client_uses_service_user_agent(self):
         client = _jwk_client()
@@ -32,35 +44,68 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(client.headers["Accept"], "application/json")
         self.assertEqual(client.timeout, 10)
 
-    @patch("src.settings.web.verify_auth_token")
-    def test_callback_token_is_exchanged_for_secure_http_only_cookie(self, verify_token):
-        verify_token.return_value = {"sub": "auth-user", "exp": int(time.time()) + 3600}
-        response = self.client.post("/api/session", json={"access_token": "x" * 40})
-        self.assertEqual(response.status_code, 200)
+    def test_callback_code_is_exchanged_for_secure_http_only_cookie(self):
+        self.store.consume_login.return_value = "verifier"
+        response = self.client.get("/callback?code=one-time-code&state=state-value", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
         cookie = response.headers["set-cookie"]
-        self.assertIn("knowledge_session=", cookie)
+        self.assertIn("knowledge_session=opaque-session-id", cookie)
         self.assertIn("HttpOnly", cookie)
         self.assertIn("Secure", cookie)
         self.assertIn("SameSite=lax", cookie)
+        self.assertEqual(response.headers["location"], "/dashboard")
+        self.store.consume_login.assert_called_once_with("state-value")
+        self.store.oauth_client.exchange_code.assert_awaited_once_with("one-time-code", "verifier")
 
-    @patch("src.settings.web.verify_auth_token")
-    def test_callback_logs_only_verification_error_type(self, verify_token):
-        token = "sensitive-token-value-that-must-not-be-logged"
-        verify_token.side_effect = __import__("jwt").InvalidIssuerError("issuer mismatch")
+    def test_callback_logs_only_error_type(self):
+        from src.settings.oauth_session import OAuthSessionExpired
+        self.store.consume_login.side_effect = OAuthSessionExpired("sensitive-state-detail")
         with self.assertLogs("settings_auth", level="WARNING") as captured:
-            response = self.client.post("/api/session", json={"access_token": token})
+            response = self.client.get("/callback?code=secret-code&state=secret-state")
         self.assertEqual(response.status_code, 401)
         output = "\n".join(captured.output)
-        self.assertIn("InvalidIssuerError", output)
-        self.assertNotIn(token, output)
-        self.assertNotIn("issuer mismatch", output)
+        self.assertIn("OAuthSessionExpired", output)
+        self.assertNotIn("secret-code", output)
+        self.assertNotIn("secret-state", output)
+        self.assertNotIn("sensitive-state-detail", output)
 
-    @patch("src.settings.web.verify_auth_token")
-    def test_settings_page_is_available_with_valid_session(self, verify_token):
-        verify_token.return_value = {"sub": "auth-user", "exp": int(time.time()) + 3600}
-        response = self.client.get("/settings", cookies={"knowledge_session": "valid-token"})
+    def test_settings_page_is_available_with_valid_server_session(self):
+        response = self.client.get("/settings", cookies={"knowledge_session": "opaque-session"})
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 설정", response.text)
+        self.assertIn("등록·수정", response.text)
+        self.store.resolve.assert_awaited_once_with("opaque-session")
+
+    def test_settings_edit_is_separate_from_read_only_page(self):
+        response = self.client.get("/settings/edit", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("OpenAI API Key", response.text)
+        self.assertIn("settings-form", response.text)
+
+    def test_dashboard_is_the_authenticated_landing_page(self):
+        response = self.client.get("/dashboard", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("LLM-Wiki 대시보드", response.text)
+        self.assertIn("새 키 발급", response.text)
+
+    def test_search_feedback_has_a_dedicated_page(self):
+        response = self.client.get("/search-feedback", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("LLM-Wiki 검색 평가", response.text)
+        self.assertIn("전체 만족도", (self.client.get("/settings/assets/feedback.js").text))
+
+    def test_search_graph_page_loads_bundled_visualization(self):
+        response = self.client.get("/search-feedback/event-1", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("검색 그래프", response.text)
+        asset = self.client.get("/settings/assets/cytoscape-3.34.0.min.js")
+        self.assertEqual(asset.status_code, 200)
+        self.assertGreater(len(asset.content), 400000)
+
+    def test_logout_revokes_server_session(self):
+        response = self.client.post("/logout", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.store.revoke.assert_called_once_with("opaque-session")
 
     def test_settings_api_requires_authorization(self):
         response = self.client.get("/api/settings")
@@ -105,6 +150,8 @@ class SettingsWebTests(unittest.TestCase):
         try:
             client = TestClient(SettingsPathDispatcher(settings_app, fallback))
             self.assertEqual(client.get("/settings", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/dashboard", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/search-feedback", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.post("/mcp", headers={"host": "knowledge.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/settings", headers={"host": "knowledge.lynply.com"}).status_code, 200)
         finally:

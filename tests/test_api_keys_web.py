@@ -30,6 +30,16 @@ class ApiKeyWebTests(unittest.TestCase):
         response = self.client.post("/api/keys", json={"key_name": "codex"})
         self.assertEqual(response.status_code, 401)
 
+    @patch("src.settings.web.ApiKeyService")
+    @patch("src.settings.web._authenticated_auth_id")
+    def test_dashboard_lists_keys_for_current_login(self, authenticated_auth_id, service_type):
+        authenticated_auth_id.return_value = "auth-user-1"
+        service_type.return_value.list_for_user.return_value = [{"key_id": "key-1"}]
+        response = self.client.get("/api/keys")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{"key_id": "key-1"}])
+        service_type.return_value.list_for_user.assert_called_once_with("auth-user-1")
+
     @patch("src.settings.web.verify_auth_token", return_value={"sub": "auth-user-1"})
     @patch("src.settings.web.ApiKeyService")
     def test_revoke_is_scoped_to_authenticated_subject(self, service_type, _verify):

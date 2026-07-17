@@ -142,6 +142,11 @@ class WikiSearcher:
                 "vector_similarity": doc.get("vector_similarity", 0.0),
                 "lexical_rank": doc.get("lexical_rank", 0.0),
                 "rrf_score": doc.get("rrf_score", 0.0),
+                "search_sources": doc.get("search_sources", []),
+                "vector_chunk_index": doc.get("vector_chunk_index"),
+                "keyword_chunk_index": doc.get("keyword_chunk_index"),
+                "matched_chunk_index": doc.get("chunk_index"),
+                "matched_chunk_preview": doc.get("content", "")[:500],
                 "retrieval_kind": "direct",
                 "raw_frontmatter": doc.get("raw_frontmatter"),  # frontmatter 정보 포함
                 "citation_count": doc.get("citation_count", 0)  # [추가] 인용 횟수 전달

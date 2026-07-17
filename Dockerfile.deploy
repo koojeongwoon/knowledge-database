@@ -1,0 +1,9 @@
+FROM docker.io/library/mcp-wiki-server:oauth-session-20260716-2030
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+COPY main.py tests/search_quality_development.json tests/search_quality_gates.json ./
+RUN pip install --no-cache-dir --no-deps .
+
+CMD ["uvicorn", "src.api.mcp_server:app", "--host", "0.0.0.0", "--port", "8000"]

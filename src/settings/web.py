@@ -1,11 +1,10 @@
 from pathlib import Path
 import logging
 import os
-import time
 from typing import List, Optional
 
 import jwt
-from fastapi import Cookie, FastAPI, Header, HTTPException, status
+from fastapi import Cookie, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -14,14 +13,14 @@ from src.api_keys.auth import verify_auth_token
 from src.api_keys.service import ApiKeyService
 from src.settings.service import SettingsEncryptionError, UserSettingsService
 from src.retrieval.feedback import SearchFeedbackService
+from src.settings.oauth_session import (
+    OAuthSessionError,
+    session_store,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 settings_app = FastAPI(title="LLM-Wiki Settings", docs_url=None, redoc_url=None)
 SESSION_COOKIE = "knowledge_session"
-LOGIN_URL = os.getenv(
-    "KNOWLEDGE_LOGIN_URL",
-    "https://auth.snappytory.com/portal/tenants/knowledge/login",
-)
 logger = logging.getLogger("settings_auth")
 
 
@@ -39,13 +38,12 @@ class CreateApiKeyPayload(BaseModel):
     validity_days: int = Field(default=365, ge=1, le=3650)
 
 
-class SessionPayload(BaseModel):
-    access_token: str = Field(min_length=20, max_length=8192)
-
-
 class SearchFeedbackPayload(BaseModel):
     relevant_paths: List[str] = Field(default_factory=list, max_length=20)
+    partially_relevant_paths: List[str] = Field(default_factory=list, max_length=20)
     irrelevant_paths: List[str] = Field(default_factory=list, max_length=20)
+    satisfaction: Optional[str] = Field(default=None, pattern="^(satisfied|partial|dissatisfied)$")
+    failure_reasons: List[str] = Field(default_factory=list, max_length=10)
     expected_no_answer: bool = False
     missing_answer_path: Optional[str] = Field(default=None, max_length=512)
     notes: Optional[str] = Field(default=None, max_length=2000)
@@ -54,9 +52,9 @@ class SearchFeedbackPayload(BaseModel):
 async def _authenticated_user(authorization: Optional[str], session_token: Optional[str] = None) -> str:
     if session_token:
         try:
-            claims = verify_auth_token(session_token)
-            return ApiKeyService().get_or_create_user(claims["sub"])
-        except jwt.PyJWTError as exc:
+            token_set = await session_store().resolve(session_token)
+            return ApiKeyService().get_or_create_user(token_set.auth_id)
+        except OAuthSessionError as exc:
             raise HTTPException(status_code=401, detail="로그인 세션이 만료되었습니다.") from exc
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
@@ -66,16 +64,18 @@ async def _authenticated_user(authorization: Optional[str], session_token: Optio
     return result.get("user_id", "SYSTEM")
 
 
-def _authenticated_auth_id(authorization: Optional[str], session_token: Optional[str] = None) -> str:
-    token = session_token
-    if not token and authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-    if not token:
+async def _authenticated_auth_id(authorization: Optional[str], session_token: Optional[str] = None) -> str:
+    if session_token:
+        try:
+            return (await session_store().resolve(session_token)).auth_id
+        except OAuthSessionError as exc:
+            raise HTTPException(status_code=401, detail="로그인 세션이 만료되었습니다.") from exc
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="인증서버 로그인 토큰이 필요합니다.")
     try:
-        claims = verify_auth_token(token)
+        claims = verify_auth_token(authorization.split(" ", 1)[1].strip())
         return claims["sub"]
-    except jwt.PyJWTError as exc:
+    except (jwt.PyJWTError, KeyError) as exc:
         raise HTTPException(status_code=401, detail="유효하지 않은 인증서버 로그인 토큰입니다.") from exc
 
 
@@ -91,42 +91,74 @@ def health():
 
 
 @settings_app.get("/settings", response_class=HTMLResponse, include_in_schema=False)
-def settings_page(knowledge_session: Optional[str] = Cookie(default=None)):
+async def settings_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("index.html", knowledge_session)
+
+
+@settings_app.get("/settings/edit", response_class=HTMLResponse, include_in_schema=False)
+async def settings_edit_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("edit.html", knowledge_session)
+
+
+async def _protected_page(filename: str, knowledge_session: Optional[str]):
     if not knowledge_session:
-        return RedirectResponse(LOGIN_URL, status_code=302)
+        return RedirectResponse("/login", status_code=302)
     try:
-        verify_auth_token(knowledge_session)
-    except jwt.PyJWTError:
-        response = RedirectResponse(LOGIN_URL, status_code=302)
+        await session_store().resolve(knowledge_session)
+    except OAuthSessionError:
+        response = RedirectResponse("/login", status_code=302)
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
-    return HTMLResponse((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse((STATIC_DIR / filename).read_text(encoding="utf-8"))
 
 
-@settings_app.get("/callback", response_class=HTMLResponse, include_in_schema=False)
-def auth_callback():
-    return HTMLResponse((STATIC_DIR / "callback.html").read_text(encoding="utf-8"))
+@settings_app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("dashboard.html", knowledge_session)
+
+
+@settings_app.get("/search-feedback", response_class=HTMLResponse, include_in_schema=False)
+async def search_feedback_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("feedback.html", knowledge_session)
+
+
+@settings_app.get("/search-feedback/{search_id}", response_class=HTMLResponse, include_in_schema=False)
+async def search_graph_page(search_id: str, knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("search-graph.html", knowledge_session)
 
 
 @settings_app.get("/login", include_in_schema=False)
 def login():
-    return RedirectResponse(LOGIN_URL, status_code=302)
-
-
-@settings_app.post("/api/session", include_in_schema=False)
-def create_session(payload: SessionPayload):
     try:
-        claims = verify_auth_token(payload.access_token)
-    except jwt.PyJWTError as exc:
-        # 토큰이나 claim은 기록하지 않고 실패 유형만 남긴다.
-        logger.warning("Login token verification failed: error_type=%s", type(exc).__name__)
-        raise HTTPException(status_code=401, detail="유효하지 않은 로그인 토큰입니다.") from exc
-    max_age = max(1, min(int(claims.get("exp", 0)) - int(time.time()), 86400))
-    response = JSONResponse({"success": True})
+        state, _, challenge = session_store().begin_login()
+        return RedirectResponse(
+            session_store().oauth_client.authorization_url(state, challenge),
+            status_code=302,
+        )
+    except OAuthSessionError:
+        return HTMLResponse("로그인 서비스를 일시적으로 사용할 수 없습니다.", status_code=503)
+
+
+@settings_app.get("/callback", include_in_schema=False)
+async def auth_callback(
+    code: Optional[str] = Query(default=None),
+    state: Optional[str] = Query(default=None),
+    error: Optional[str] = Query(default=None),
+):
+    if error or not code or not state:
+        return HTMLResponse("로그인이 취소되었거나 올바르지 않은 응답입니다.", status_code=400)
+    try:
+        verifier = session_store().consume_login(state)
+        payload = await session_store().oauth_client.exchange_code(code, verifier)
+        session_id = session_store().create(payload)
+    except OAuthSessionError as exc:
+        logger.warning("OAuth callback failed: error_type=%s", type(exc).__name__)
+        return HTMLResponse("로그인 세션을 만들지 못했습니다. 다시 시도해 주세요.", status_code=401)
+    response = RedirectResponse("/dashboard", status_code=303)
     response.set_cookie(
         SESSION_COOKIE,
-        payload.access_token,
-        max_age=max_age,
+        session_id,
+        max_age=session_store().session_ttl,
         httponly=True,
         secure=True,
         samesite="lax",
@@ -136,7 +168,9 @@ def create_session(payload: SessionPayload):
 
 
 @settings_app.post("/logout", include_in_schema=False)
-def logout():
+def logout(knowledge_session: Optional[str] = Cookie(default=None)):
+    if knowledge_session:
+        session_store().revoke(knowledge_session)
     response = JSONResponse({"success": True})
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
@@ -150,6 +184,56 @@ def settings_css():
 @settings_app.get("/settings/assets/settings.js", include_in_schema=False)
 def settings_js():
     return Response((STATIC_DIR / "settings.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/edit.js", include_in_schema=False)
+def settings_edit_js():
+    return Response((STATIC_DIR / "edit.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/settings-view.css", include_in_schema=False)
+def settings_view_css():
+    return Response((STATIC_DIR / "settings-view.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/settings/assets/feedback.js", include_in_schema=False)
+def feedback_js():
+    return Response((STATIC_DIR / "feedback.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/feedback-links.js", include_in_schema=False)
+def feedback_links_js():
+    return Response((STATIC_DIR / "feedback-links.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/feedback.css", include_in_schema=False)
+def feedback_css():
+    return Response((STATIC_DIR / "feedback.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/settings/assets/search-graph.js", include_in_schema=False)
+def search_graph_js():
+    return Response((STATIC_DIR / "search-graph.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/search-graph.css", include_in_schema=False)
+def search_graph_css():
+    return Response((STATIC_DIR / "search-graph.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/settings/assets/cytoscape-3.34.0.min.js", include_in_schema=False)
+def cytoscape_js():
+    return Response((STATIC_DIR / "cytoscape-3.34.0.min.js").read_bytes(), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/dashboard.js", include_in_schema=False)
+def dashboard_js():
+    return Response((STATIC_DIR / "dashboard.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/dashboard.css", include_in_schema=False)
+def dashboard_css():
+    return Response((STATIC_DIR / "dashboard.css").read_text(encoding="utf-8"), media_type="text/css")
 
 
 @settings_app.get("/api/settings")
@@ -193,20 +277,20 @@ async def save_settings(
 
 
 @settings_app.get("/api/keys")
-def list_api_keys(authorization: Optional[str] = Header(default=None), knowledge_session: Optional[str] = Cookie(default=None)):
-    auth_id = _authenticated_auth_id(authorization, knowledge_session)
+async def list_api_keys(authorization: Optional[str] = Header(default=None), knowledge_session: Optional[str] = Cookie(default=None)):
+    auth_id = await _authenticated_auth_id(authorization, knowledge_session)
     return ApiKeyService().list_for_user(auth_id)
 
 
 @settings_app.post("/api/keys", status_code=status.HTTP_201_CREATED)
-def create_api_key(payload: CreateApiKeyPayload, authorization: Optional[str] = Header(default=None), knowledge_session: Optional[str] = Cookie(default=None)):
-    auth_id = _authenticated_auth_id(authorization, knowledge_session)
+async def create_api_key(payload: CreateApiKeyPayload, authorization: Optional[str] = Header(default=None), knowledge_session: Optional[str] = Cookie(default=None)):
+    auth_id = await _authenticated_auth_id(authorization, knowledge_session)
     return ApiKeyService().create(auth_id, payload.key_name, payload.validity_days)
 
 
 @settings_app.delete("/api/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
-def revoke_api_key(key_id: str, authorization: Optional[str] = Header(default=None), knowledge_session: Optional[str] = Cookie(default=None)):
-    auth_id = _authenticated_auth_id(authorization, knowledge_session)
+async def revoke_api_key(key_id: str, authorization: Optional[str] = Header(default=None), knowledge_session: Optional[str] = Cookie(default=None)):
+    auth_id = await _authenticated_auth_id(authorization, knowledge_session)
     if not ApiKeyService().revoke(auth_id, key_id):
         raise HTTPException(status_code=404, detail="API Key를 찾을 수 없습니다.")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -222,6 +306,22 @@ async def recent_search_events(
     service = SearchFeedbackService()
     try:
         return {"events": service.list_recent(owner_id, limit)}
+    finally:
+        service.db_manager.close()
+
+
+@settings_app.get("/api/search-feedback/{search_id}/graph")
+async def search_feedback_graph(
+    search_id: str,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    service = SearchFeedbackService()
+    try:
+        return service.graph_for_event(owner_id, search_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     finally:
         service.db_manager.close()
 
@@ -265,15 +365,15 @@ class SettingsPathDispatcher:
             await self._not_found(scope, receive, send)
             return
         if mcp_host and host == mcp_host and (
-            path == "/settings" or path.startswith("/settings/") or
+            path in ("/dashboard", "/settings", "/search-feedback") or path.startswith("/search-feedback/") or path.startswith("/settings/") or
             path.startswith("/api/settings") or path.startswith("/api/keys") or
             path.startswith("/api/search-feedback") or
-            path in ("/callback", "/login", "/logout", "/api/session")
+            path in ("/callback", "/login", "/logout")
         ):
             await self._not_found(scope, receive, send)
             return
 
-        web_path = (path in ("/", "/health", "/settings", "/callback", "/login", "/logout", "/api/session") or
+        web_path = (path in ("/", "/health", "/dashboard", "/settings", "/search-feedback", "/callback", "/login", "/logout") or path.startswith("/search-feedback/") or
                     path.startswith("/settings/") or path.startswith("/api/settings"))
         web_path = web_path or path.startswith("/api/keys")
         web_path = web_path or path.startswith("/api/search-feedback")

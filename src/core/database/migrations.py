@@ -227,6 +227,25 @@ def _create_search_feedback(cur) -> None:
     """)
 
 
+def _extend_search_feedback_labels(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_search_feedback
+        ADD COLUMN IF NOT EXISTS partially_relevant_paths TEXT[] NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS satisfaction VARCHAR(20),
+        ADD COLUMN IF NOT EXISTS failure_reasons TEXT[] NOT NULL DEFAULT '{}';
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_search_feedback
+        DROP CONSTRAINT IF EXISTS ck_feedback_satisfaction;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_search_feedback
+        ADD CONSTRAINT ck_feedback_satisfaction CHECK (
+            satisfaction IS NULL OR satisfaction IN ('satisfied', 'partial', 'dissatisfied')
+        );
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -236,6 +255,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(6, "require_remote_user_storage", _require_remote_user_storage),
     Migration(7, "default_to_s3_storage", _default_to_s3_storage),
     Migration(8, "create_search_feedback", _create_search_feedback),
+    Migration(9, "extend_search_feedback_labels", _extend_search_feedback_labels),
 )
 
 
