@@ -1,6 +1,6 @@
 import fnmatch
 import posixpath
-from typing import List
+from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -65,6 +65,23 @@ class S3StorageManager(BaseStorageManager):
             Key=key,
             Body=content.encode('utf-8'),
             ContentType="text/markdown"
+        )
+
+    def read_bytes(self, path: str) -> bytes:
+        key = self._normalize_key(path)
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+            return response["Body"].read()
+        except ClientError as e:
+            raise FileNotFoundError(f"S3 Object not found: {key}. Error: {e}") from e
+
+    def write_bytes(self, path: str, content: bytes, content_type: Optional[str] = None) -> None:
+        key = self._normalize_key(path)
+        self.s3_client.put_object(
+            Bucket=self.bucket_name,
+            Key=key,
+            Body=content,
+            ContentType=content_type or "application/octet-stream",
         )
 
     def list_files(self, target_dir: str, pattern: str = "*.md") -> List[str]:

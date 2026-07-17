@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LLM-Wiki 학습 현황</title>
+  <link rel="stylesheet" href="/settings/assets/settings.css">
+  <link rel="stylesheet" href="/settings/assets/dashboard.css">
+  <link rel="stylesheet" href="/settings/assets/learning.css">
+</head>
+<body>
+<main class="learning-shell">
+  <nav class="top-nav"><a href="/dashboard">대시보드</a><a class="active" href="/learning">학습</a><a href="/inbox">Inbox</a><a href="/documents">문서</a><a href="/settings">연결 설정</a><a href="/search-feedback">검색 평가</a></nav>
+  <header class="learning-header"><div><p class="eyebrow">LEARNING LOOP</p><h1>학습 현황</h1><p class="intro">세션, 복습, 지식화 흐름을 확인합니다. LLM의 판정은 실제 이해도의 정답이 아닙니다.</p></div><div class="header-actions"><select id="period" aria-label="조회 기간"><option value="7">최근 7일</option><option value="30" selected>최근 30일</option><option value="90">최근 90일</option></select><button id="refresh" class="secondary" type="button">새로고침</button></div></header>
+  <div id="message" class="message" role="status" aria-live="polite"></div>
+  <section id="summary" class="learning-summary" aria-label="학습 요약"></section>
+  <section class="learning-grid">
+    <article class="card"><div class="section-heading"><div><span>01</span><h2>튜터 판정</h2></div></div><p class="hint">클라이언트 LLM이 제출한 흐름 제어용 판정입니다.</p><div id="assessments" class="metric-list"></div></article>
+    <article class="card"><div class="section-heading"><div><span>02</span><h2>지식화 결정</h2></div></div><p class="hint">사용자가 후보별로 명시적으로 승인하거나 거절한 결과입니다.</p><div id="candidates" class="metric-list"></div></article>
+  </section>
+  <section class="card"><div class="section-heading"><div><span>03</span><h2>주제별 활동</h2></div></div><div id="topics" class="data-table"></div></section>
+  <section class="card"><div class="section-heading"><div><span>04</span><h2>최근 학습 세션</h2></div></div><div id="sessions" class="session-list"></div></section>
+  <aside class="metric-notice"><strong>지표 해석 원칙</strong><span id="metric-notice">LLM 판정과 사용자 행동을 불러오는 중입니다.</span></aside>
+</main>
+<script src="/settings/assets/learning.js" defer></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
 class BaseStorageManager(ABC):
     @abstractmethod
@@ -15,6 +15,16 @@ class BaseStorageManager(ABC):
     @abstractmethod
     def write_text(self, path: str, content: str) -> None:
         """지정된 경로에 텍스트 내용을 저장합니다."""
+        pass
+
+    @abstractmethod
+    def read_bytes(self, path: str) -> bytes:
+        """지정된 경로의 파일을 바이트로 읽어옵니다."""
+        pass
+
+    @abstractmethod
+    def write_bytes(self, path: str, content: bytes, content_type: Optional[str] = None) -> None:
+        """지정된 경로에 바이트 파일을 저장합니다."""
         pass
 
     @abstractmethod

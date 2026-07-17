@@ -4,7 +4,7 @@ import os
 from typing import List, Optional
 
 import jwt
-from fastapi import Cookie, FastAPI, Header, HTTPException, Query, status
+from fastapi import Cookie, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -13,7 +13,11 @@ from src.api_keys.auth import verify_auth_token
 from src.api_keys.service import ApiKeyService
 from src.settings.service import SettingsEncryptionError, UserSettingsService
 from src.settings.documents import DocumentBrowserService
+from src.settings.inbox import InboxService, MAX_UPLOAD_BYTES
 from src.retrieval.feedback import SearchFeedbackService
+from src.core.database.factory import DatabaseManager
+from src.learning.application.dashboard import LearningDashboardService
+from src.learning.infrastructure.dashboard_repository import LearningDashboardRepository
 from src.settings.oauth_session import (
     OAuthSessionError,
     session_store,
@@ -37,6 +41,12 @@ class SettingsPayload(BaseModel):
 class CreateApiKeyPayload(BaseModel):
     key_name: str = Field(min_length=1, max_length=100)
     validity_days: int = Field(default=365, ge=1, le=3650)
+
+
+class InboxLinkPayload(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    title: Optional[str] = Field(default=None, max_length=300)
+    note: Optional[str] = Field(default=None, max_length=2000)
 
 
 class SearchResultFeedbackPayload(BaseModel):
@@ -137,6 +147,16 @@ async def dashboard_page(knowledge_session: Optional[str] = Cookie(default=None)
 @settings_app.get("/documents", response_class=HTMLResponse, include_in_schema=False)
 async def documents_page(knowledge_session: Optional[str] = Cookie(default=None)):
     return await _protected_page("documents.html", knowledge_session)
+
+
+@settings_app.get("/inbox", response_class=HTMLResponse, include_in_schema=False)
+async def inbox_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("inbox.html", knowledge_session)
+
+
+@settings_app.get("/learning", response_class=HTMLResponse, include_in_schema=False)
+async def learning_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("learning.html", knowledge_session)
 
 
 @settings_app.get("/search-feedback", response_class=HTMLResponse, include_in_schema=False)
@@ -266,6 +286,107 @@ def documents_js():
 @settings_app.get("/settings/assets/documents.css", include_in_schema=False)
 def documents_css():
     return Response((STATIC_DIR / "documents.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/settings/assets/inbox.js", include_in_schema=False)
+def inbox_js():
+    return Response((STATIC_DIR / "inbox.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/inbox.css", include_in_schema=False)
+def inbox_css():
+    return Response((STATIC_DIR / "inbox.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/settings/assets/learning.js", include_in_schema=False)
+def learning_js():
+    return Response((STATIC_DIR / "learning.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/learning.css", include_in_schema=False)
+def learning_css():
+    return Response((STATIC_DIR / "learning.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/api/learning/dashboard")
+async def learning_dashboard(
+    days: int = Query(default=30),
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    db_manager = DatabaseManager()
+    service = LearningDashboardService(LearningDashboardRepository(db_manager))
+    try:
+        return service.get(owner_id, days)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        db_manager.close()
+
+
+@settings_app.get("/api/inbox")
+async def list_inbox_items(
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    try:
+        return {"items": InboxService(owner_id).list_items()}
+    except ConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@settings_app.post("/api/inbox/links", status_code=status.HTTP_201_CREATED)
+async def create_inbox_link(
+    payload: InboxLinkPayload,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    try:
+        return InboxService(owner_id).add_link(payload.url, payload.title, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@settings_app.post("/api/inbox/files", status_code=status.HTTP_201_CREATED)
+async def create_inbox_file(
+    file: UploadFile = File(...),
+    note: Optional[str] = Form(default=None, max_length=2000),
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        return InboxService(owner_id).add_file(file.filename or "file", content, file.content_type, note)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@settings_app.get("/api/inbox/{item_id}/file")
+async def download_inbox_file(
+    item_id: str,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    try:
+        item, content = InboxService(owner_id).read_file(item_id)
+        from urllib.parse import quote
+        filename = quote(item.get("filename", "download"))
+        return Response(content, media_type=item.get("content_type") or "application/octet-stream", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"})
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.") from exc
+    except ConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @settings_app.get("/api/documents")
@@ -445,19 +566,23 @@ class SettingsPathDispatcher:
             await self._not_found(scope, receive, send)
             return
         if mcp_host and host == mcp_host and (
-            path in ("/dashboard", "/documents", "/settings", "/search-feedback") or path.startswith("/search-feedback/") or path.startswith("/settings/") or
+            path in ("/dashboard", "/documents", "/inbox", "/learning", "/settings", "/search-feedback") or path.startswith("/search-feedback/") or path.startswith("/settings/") or
             path.startswith("/api/settings") or path.startswith("/api/keys") or
             path.startswith("/api/documents") or
+            path.startswith("/api/inbox") or
+            path.startswith("/api/learning") or
             path.startswith("/api/search-feedback") or
             path in ("/callback", "/login", "/logout")
         ):
             await self._not_found(scope, receive, send)
             return
 
-        web_path = (path in ("/", "/health", "/dashboard", "/documents", "/settings", "/search-feedback", "/callback", "/login", "/logout") or path.startswith("/search-feedback/") or
+        web_path = (path in ("/", "/health", "/dashboard", "/documents", "/inbox", "/learning", "/settings", "/search-feedback", "/callback", "/login", "/logout") or path.startswith("/search-feedback/") or
                     path.startswith("/settings/") or path.startswith("/api/settings"))
         web_path = web_path or path.startswith("/api/keys")
         web_path = web_path or path.startswith("/api/documents")
+        web_path = web_path or path.startswith("/api/inbox")
+        web_path = web_path or path.startswith("/api/learning")
         web_path = web_path or path.startswith("/api/search-feedback")
         await (self.web_app if web_path else self.mcp_app)(scope, receive, send)
 

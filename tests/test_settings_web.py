@@ -99,6 +99,67 @@ class SettingsWebTests(unittest.TestCase):
         self.assertIn("문서 검색", response.text)
         self.assertEqual(self.client.get("/settings/assets/documents.js").status_code, 200)
 
+    def test_inbox_page_is_protected_and_serves_upload_ui(self):
+        unauthenticated = self.client.get("/inbox", follow_redirects=False)
+        self.assertEqual(unauthenticated.status_code, 302)
+        response = self.client.get("/inbox", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("파일 올리기", response.text)
+        self.assertIn("링크 보관", response.text)
+        self.assertEqual(self.client.get("/settings/assets/inbox.js").status_code, 200)
+
+    def test_learning_dashboard_is_protected_and_serves_local_assets(self):
+        unauthenticated = self.client.get("/learning", follow_redirects=False)
+        self.assertEqual(unauthenticated.status_code, 302)
+        response = self.client.get("/learning", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("학습 현황", response.text)
+        self.assertIn("실제 이해도의 정답이 아닙니다", response.text)
+        self.assertEqual(self.client.get("/settings/assets/learning.js").status_code, 200)
+        self.assertEqual(self.client.get("/settings/assets/learning.css").status_code, 200)
+
+    @patch("src.settings.web.DatabaseManager")
+    @patch("src.settings.web.LearningDashboardService")
+    @patch("src.settings.web._authenticated_user")
+    def test_learning_metrics_are_owner_scoped(self, authenticated_user, service_class, database_manager):
+        authenticated_user.return_value = "USER_7"
+        service_class.return_value.get.return_value = {
+            "sessions": {"active_sessions": 1}, "metric_contract": {"client_llm_assessments_are_ground_truth": False},
+        }
+
+        response = self.client.get("/api/learning/dashboard?days=90")
+
+        self.assertEqual(response.status_code, 200)
+        service_class.return_value.get.assert_called_once_with("USER_7", 90)
+        database_manager.return_value.close.assert_called_once()
+
+    @patch("src.settings.web.InboxService")
+    @patch("src.settings.web._authenticated_user")
+    def test_inbox_list_is_scoped_to_authenticated_owner(self, authenticated_user, service_class):
+        authenticated_user.return_value = "USER_1"
+        service_class.return_value.list_items.return_value = [{"id": "one", "type": "link"}]
+        response = self.client.get("/api/inbox")
+        self.assertEqual(response.status_code, 200)
+        service_class.assert_called_once_with("USER_1")
+
+    @patch("src.settings.web.InboxService")
+    @patch("src.settings.web._authenticated_user")
+    def test_inbox_accepts_link_and_file_for_authenticated_owner(self, authenticated_user, service_class):
+        authenticated_user.return_value = "USER_2"
+        service_class.return_value.add_link.return_value = {"id": "link", "type": "link"}
+        link = self.client.post("/api/inbox/links", json={"url": "https://example.com", "title": "Example"})
+        self.assertEqual(link.status_code, 201)
+        service_class.assert_called_with("USER_2")
+
+        service_class.return_value.add_file.return_value = {"id": "file", "type": "file"}
+        uploaded = self.client.post(
+            "/api/inbox/files",
+            files={"file": ("notes.txt", b"hello", "text/plain")},
+            data={"note": "study"},
+        )
+        self.assertEqual(uploaded.status_code, 201)
+        service_class.return_value.add_file.assert_called_once_with("notes.txt", b"hello", "text/plain", "study")
+
     @patch("src.settings.web.DocumentBrowserService")
     @patch("src.settings.web._authenticated_user")
     def test_document_list_is_scoped_to_authenticated_owner(self, authenticated_user, service_class):
@@ -216,6 +277,10 @@ class SettingsWebTests(unittest.TestCase):
             self.assertEqual(client.get("/search-feedback", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/documents", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/api/documents", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/inbox", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/api/inbox", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/learning", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/api/learning/dashboard", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.post("/mcp", headers={"host": "knowledge.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/settings", headers={"host": "knowledge.lynply.com"}).status_code, 200)
         finally:

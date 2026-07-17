@@ -324,6 +324,190 @@ def _create_search_feedback_telemetry(cur) -> None:
     """)
 
 
+def _create_learning_sessions(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_sessions (
+            session_id UUID PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            client_request_id VARCHAR(100),
+            topic VARCHAR(300) NOT NULL,
+            requested_scope VARCHAR(20) NOT NULL,
+            effective_scope VARCHAR(20) NOT NULL,
+            goal VARCHAR(500) NOT NULL,
+            level VARCHAR(20) NOT NULL,
+            duration_minutes INT NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'active',
+            plan_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+            completion_summary TEXT,
+            started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT uq_learning_session_request UNIQUE (owner_id, client_request_id),
+            CONSTRAINT ck_learning_requested_scope CHECK (requested_scope IN ('inbox', 'knowledge', 'combined')),
+            CONSTRAINT ck_learning_effective_scope CHECK (effective_scope IN ('none', 'inbox', 'knowledge', 'combined')),
+            CONSTRAINT ck_learning_level CHECK (level IN ('beginner', 'practical', 'advanced')),
+            CONSTRAINT ck_learning_duration CHECK (duration_minutes BETWEEN 5 AND 120),
+            CONSTRAINT ck_learning_session_status CHECK (status IN ('active', 'completed'))
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_learning_sessions_owner_updated_idx
+        ON knowledge_learning_sessions (owner_id, status, updated_at DESC);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_questions (
+            question_id UUID PRIMARY KEY,
+            session_id UUID NOT NULL REFERENCES knowledge_learning_sessions(session_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            sequence_no INT NOT NULL,
+            question_type VARCHAR(30) NOT NULL,
+            prompt TEXT NOT NULL,
+            evidence_refs TEXT[] NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_learning_question_sequence UNIQUE (session_id, sequence_no),
+            CONSTRAINT ck_learning_question_sequence CHECK (sequence_no > 0)
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_attempts (
+            attempt_id UUID PRIMARY KEY,
+            session_id UUID NOT NULL REFERENCES knowledge_learning_sessions(session_id) ON DELETE CASCADE,
+            question_id UUID NOT NULL REFERENCES knowledge_learning_questions(question_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            client_request_id VARCHAR(100),
+            answer TEXT NOT NULL,
+            assessment VARCHAR(20) NOT NULL,
+            confidence VARCHAR(20) NOT NULL,
+            missing_concepts TEXT[] NOT NULL DEFAULT '{}',
+            misconceptions TEXT[] NOT NULL DEFAULT '{}',
+            evidence_refs TEXT[] NOT NULL DEFAULT '{}',
+            feedback_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_learning_attempt_request UNIQUE (owner_id, client_request_id),
+            CONSTRAINT ck_learning_attempt_assessment CHECK (
+                assessment IN ('mastered', 'partial', 'misconception', 'unknown', 'unverifiable')
+            ),
+            CONSTRAINT ck_learning_attempt_confidence CHECK (confidence IN ('low', 'medium', 'high'))
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_learning_attempts_session_idx
+        ON knowledge_learning_attempts (owner_id, session_id, created_at);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_sources (
+            session_id UUID NOT NULL REFERENCES knowledge_learning_sessions(session_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            source_type VARCHAR(20) NOT NULL,
+            source_ref TEXT NOT NULL,
+            relationship VARCHAR(20),
+            snapshot_hash CHAR(64) NOT NULL,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (session_id, source_type, source_ref),
+            CONSTRAINT ck_learning_source_type CHECK (source_type IN ('inbox', 'knowledge')),
+            CONSTRAINT ck_learning_source_relationship CHECK (
+                relationship IS NULL OR relationship IN ('confirm', 'extend', 'conflict', 'replace', 'unresolved')
+            )
+        );
+    """)
+
+
+def _create_learning_reviews(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_reviews (
+            review_id UUID PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            session_id UUID NOT NULL REFERENCES knowledge_learning_sessions(session_id) ON DELETE CASCADE,
+            question_id UUID NOT NULL REFERENCES knowledge_learning_questions(question_id) ON DELETE CASCADE,
+            source_attempt_id UUID NOT NULL REFERENCES knowledge_learning_attempts(attempt_id) ON DELETE CASCADE,
+            topic VARCHAR(300) NOT NULL,
+            prompt TEXT NOT NULL,
+            evidence_refs TEXT[] NOT NULL DEFAULT '{}',
+            review_priority VARCHAR(20) NOT NULL,
+            interval_days INT NOT NULL,
+            due_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+            review_count INT NOT NULL DEFAULT 0,
+            last_reviewed_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_learning_review_question UNIQUE (owner_id, question_id),
+            CONSTRAINT ck_learning_review_priority CHECK (
+                review_priority IN ('low', 'medium', 'high', 'critical', 'blocked')
+            ),
+            CONSTRAINT ck_learning_review_interval CHECK (interval_days BETWEEN 1 AND 365),
+            CONSTRAINT ck_learning_review_status CHECK (status IN ('scheduled', 'paused'))
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_learning_reviews_due_idx
+        ON knowledge_learning_reviews (owner_id, status, due_at);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_review_attempts (
+            review_attempt_id UUID PRIMARY KEY,
+            review_id UUID NOT NULL REFERENCES knowledge_learning_reviews(review_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            client_request_id VARCHAR(100),
+            answer TEXT NOT NULL,
+            assessment VARCHAR(20) NOT NULL,
+            confidence VARCHAR(20) NOT NULL,
+            feedback_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+            previous_interval_days INT NOT NULL,
+            next_interval_days INT NOT NULL,
+            reviewed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_learning_review_attempt_request UNIQUE (owner_id, client_request_id),
+            CONSTRAINT ck_learning_review_assessment CHECK (
+                assessment IN ('mastered', 'partial', 'misconception', 'unknown', 'unverifiable')
+            ),
+            CONSTRAINT ck_learning_review_confidence CHECK (confidence IN ('low', 'medium', 'high')),
+            CONSTRAINT ck_learning_review_previous_interval CHECK (previous_interval_days BETWEEN 1 AND 365),
+            CONSTRAINT ck_learning_review_next_interval CHECK (next_interval_days BETWEEN 1 AND 365)
+        );
+    """)
+
+
+def _create_learning_knowledge_candidates(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_learning_knowledge_candidates (
+            candidate_id UUID PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            session_id UUID NOT NULL REFERENCES knowledge_learning_sessions(session_id) ON DELETE CASCADE,
+            client_request_id VARCHAR(100),
+            candidate_type VARCHAR(30) NOT NULL,
+            title VARCHAR(300) NOT NULL,
+            description TEXT NOT NULL,
+            tags TEXT[] NOT NULL DEFAULT '{}',
+            content TEXT NOT NULL,
+            topic_name VARCHAR(256),
+            topic_update_text TEXT,
+            evidence_refs TEXT[] NOT NULL DEFAULT '{}',
+            content_hash CHAR(64) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            approval_note TEXT,
+            approved_at TIMESTAMP WITH TIME ZONE,
+            rejected_at TIMESTAMP WITH TIME ZONE,
+            committed_at TIMESTAMP WITH TIME ZONE,
+            qa_file_path TEXT,
+            topic_file_path TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_learning_candidate_request UNIQUE (owner_id, client_request_id),
+            CONSTRAINT ck_learning_candidate_type CHECK (
+                candidate_type IN ('learning_record', 'inbox_promotion', 'knowledge_correction', 'unresolved_question')
+            ),
+            CONSTRAINT ck_learning_candidate_status CHECK (
+                status IN ('pending', 'approved', 'rejected', 'committing', 'committed')
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_learning_candidates_owner_session_idx
+        ON knowledge_learning_knowledge_candidates (owner_id, session_id, status, created_at);
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -335,6 +519,9 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(8, "create_search_feedback", _create_search_feedback),
     Migration(9, "extend_search_feedback_labels", _extend_search_feedback_labels),
     Migration(10, "create_search_feedback_telemetry", _create_search_feedback_telemetry),
+    Migration(11, "create_learning_sessions", _create_learning_sessions),
+    Migration(12, "create_learning_reviews", _create_learning_reviews),
+    Migration(13, "create_learning_knowledge_candidates", _create_learning_knowledge_candidates),
 )
 
 

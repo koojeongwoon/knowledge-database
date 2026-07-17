@@ -17,6 +17,11 @@ from src.retrieval.application.service import WikiSearcher
 from src.retrieval.domain.formatter import format_retrieved_documents
 from src.retrieval.feedback import SearchFeedbackService
 from src.wiki.application.integration import WikiIntegrationManager
+from src.settings.inbox import InboxService
+from src.learning.application.service import LearningPreparationService
+from src.learning.application.session_service import LearningSessionService
+from src.learning.domain.feedback import LearningFeedbackPlanner
+from src.learning.infrastructure.repository import LearningSessionRepository
 
 
 @tool_wrapper
@@ -81,6 +86,342 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
         raise WikiBaseException(f"지식베이스 탐색 수행 중 에러 발생: {e}") from e
     finally:
         db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def create_wiki_inbox_markdown(
+    title: str,
+    content: str,
+    source_kind: str = "user_text",
+    original_filename: Optional[str] = None,
+    original_url: Optional[str] = None,
+    media_type: Optional[str] = None,
+    extraction_complete: bool = True,
+    warnings: Optional[List[str]] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    config = current_user_config.get() or {}
+    owner_id = config.get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
+    try:
+        item = InboxService(owner_id).add_markdown(
+            title=title,
+            content=content,
+            source_kind=source_kind,
+            original_filename=original_filename,
+            original_url=original_url,
+            media_type=media_type,
+            extraction_complete=extraction_complete,
+            warnings=warnings,
+            note=note,
+        )
+        log_audit("INBOX_MARKDOWN_CREATE", "SUCCESS", user_id=owner_id, payload={"item_id": item["id"]})
+        return item
+    except ValueError as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def list_wiki_inbox_items(limit: int = 50) -> Dict[str, Any]:
+    if limit < 1 or limit > 100:
+        raise InvalidArgumentException("limit은 1 이상 100 이하여야 합니다.")
+    config = current_user_config.get() or {}
+    owner_id = config.get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
+    items = InboxService(owner_id).list_items()[:limit]
+    return {"items": items, "count": len(items)}
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def read_wiki_inbox_item(item_id: str) -> Dict[str, Any]:
+    config = current_user_config.get() or {}
+    owner_id = config.get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
+    try:
+        return InboxService(owner_id).read_for_learning(item_id)
+    except (ValueError, FileNotFoundError) as exc:
+        raise InvalidArgumentException("Inbox 항목을 찾을 수 없거나 읽을 수 없습니다.") from exc
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def prepare_wiki_learning_session(
+    topic: str,
+    scope: str = "combined",
+    goal: str = "understand",
+    level: str = "practical",
+    duration_minutes: int = 20,
+    inbox_item_ids: Optional[List[str]] = None,
+    knowledge_limit: int = 5,
+) -> Dict[str, Any]:
+    config = current_user_config.get() or {}
+    owner_id = config.get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException("학습 모드를 사용하려면 인증된 사용자가 필요합니다.")
+
+    def knowledge_search(query: str, limit: int) -> str:
+        response = json.loads(retrieve_wiki_knowledge(query, limit))
+        if not response.get("success"):
+            raise WikiBaseException(response.get("message") or "Knowledge 검색에 실패했습니다.")
+        return str(response.get("data") or "")
+
+    try:
+        return LearningPreparationService(
+            inbox_service=InboxService(owner_id),
+            knowledge_search=knowledge_search,
+        ).prepare(
+            topic=topic,
+            scope=scope,
+            goal=goal,
+            level=level,
+            duration_minutes=duration_minutes,
+            inbox_item_ids=inbox_item_ids,
+            knowledge_limit=knowledge_limit,
+        )
+    except ValueError as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+
+
+@tool_wrapper
+def plan_wiki_learning_feedback(
+    assessment: str,
+    confidence: str = "medium",
+    missing_concepts: Optional[List[str]] = None,
+    misconceptions: Optional[List[str]] = None,
+    evidence_refs: Optional[List[str]] = None,
+    hint: Optional[str] = None,
+    next_question: Optional[str] = None,
+) -> Dict[str, Any]:
+    try:
+        return LearningFeedbackPlanner().plan(
+            assessment=assessment,
+            confidence=confidence,
+            missing_concepts=missing_concepts,
+            misconceptions=misconceptions,
+            evidence_refs=evidence_refs,
+            hint=hint,
+            next_question=next_question,
+        )
+    except ValueError as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+
+
+def _learning_session_service() -> LearningSessionService:
+    return LearningSessionService(LearningSessionRepository(DatabaseManager()))
+
+
+def _authenticated_learning_owner() -> str:
+    owner_id = (current_user_config.get() or {}).get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException("학습 세션을 사용하려면 인증된 사용자가 필요합니다.")
+    return owner_id
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def start_wiki_learning_session(
+    topic: str,
+    requested_scope: str,
+    effective_scope: str,
+    goal: str,
+    level: str,
+    duration_minutes: int,
+    first_question: str,
+    sources: Optional[List[Dict[str, Any]]] = None,
+    client_request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.start(
+            _authenticated_learning_owner(), topic, requested_scope, effective_scope,
+            goal, level, duration_minutes, first_question, sources, client_request_id,
+        )
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def record_wiki_learning_attempt(
+    session_id: str,
+    question_id: str,
+    answer: str,
+    assessment: str,
+    confidence: str,
+    feedback_plan: Dict[str, Any],
+    missing_concepts: Optional[List[str]] = None,
+    misconceptions: Optional[List[str]] = None,
+    evidence_refs: Optional[List[str]] = None,
+    next_question: Optional[str] = None,
+    next_question_type: str = "retrieval",
+    next_evidence_refs: Optional[List[str]] = None,
+    client_request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.record_attempt(
+            _authenticated_learning_owner(), session_id, question_id, answer,
+            assessment, confidence, feedback_plan, missing_concepts, misconceptions,
+            evidence_refs, next_question, next_question_type, next_evidence_refs,
+            client_request_id,
+        )
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def resume_wiki_learning_session(session_id: Optional[str] = None) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.resume(_authenticated_learning_owner(), session_id)
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def complete_wiki_learning_session(session_id: str, summary: Optional[str] = None) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.complete(_authenticated_learning_owner(), session_id, summary)
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def list_wiki_due_learning_reviews(limit: int = 20) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.list_due_reviews(_authenticated_learning_owner(), limit)
+    except ValueError as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def record_wiki_learning_review(
+    review_id: str,
+    answer: str,
+    assessment: str,
+    confidence: str,
+    feedback_plan: Dict[str, Any],
+    client_request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.record_review(
+            _authenticated_learning_owner(), review_id, answer, assessment,
+            confidence, feedback_plan, client_request_id,
+        )
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def prepare_wiki_learning_knowledge_candidates(session_id: str) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.prepare_knowledge_candidates(_authenticated_learning_owner(), session_id)
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def stage_wiki_learning_knowledge_candidates(
+    session_id: str, candidates: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.stage_knowledge_candidates(
+            _authenticated_learning_owner(), session_id, candidates,
+        )
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def review_wiki_learning_knowledge_candidate(
+    candidate_id: str, approved: bool, note: Optional[str] = None,
+) -> Dict[str, Any]:
+    service = _learning_session_service()
+    try:
+        return service.review_knowledge_candidate(
+            _authenticated_learning_owner(), candidate_id, approved, note,
+        )
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        service.repository.db_manager.close()
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def commit_wiki_learning_knowledge_candidate(candidate_id: str) -> Dict[str, Any]:
+    owner_id = _authenticated_learning_owner()
+    service = _learning_session_service()
+    claimed = False
+    write_succeeded = False
+    try:
+        normalized_id = service._uuid(candidate_id, "candidate_id")
+        candidate = service.repository.claim_approved_knowledge_candidate(owner_id, normalized_id)
+        if candidate["status"] == "committed":
+            return {
+                "candidate_id": normalized_id, "status": "committed",
+                "qa_file_path": candidate.get("qa_file_path"),
+                "topic_file_path": candidate.get("topic_file_path"),
+                "idempotent_replay": True,
+            }
+        claimed = True
+        response = json.loads(commit_wiki_knowledge(
+            title=candidate["title"],
+            description=candidate["description"],
+            tags=candidate["tags"],
+            content=candidate["content"],
+            topic_name=candidate.get("topic_name"),
+            topic_update_text=candidate.get("topic_update_text"),
+            visibility="private",
+        ))
+        if not response.get("success"):
+            raise WikiBaseException(response.get("message") or "승인된 후보의 Knowledge 저장에 실패했습니다.")
+        write_succeeded = True
+        data = response.get("data") or {}
+        receipt = service.repository.mark_knowledge_candidate_committed(
+            owner_id, normalized_id, data["qa_file_path"], data.get("topic_file_path"),
+        )
+        return {"candidate": receipt, "knowledge_commit": data}
+    except (ValueError, KeyError) as exc:
+        raise InvalidArgumentException(str(exc)) from exc
+    finally:
+        if claimed and not write_succeeded:
+            service.repository.release_knowledge_candidate_claim(owner_id, candidate_id)
+        service.repository.db_manager.close()
 
 
 @tool_wrapper
