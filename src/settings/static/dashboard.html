@@ -1,6 +1,6 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LLM-Wiki 대시보드</title><link rel="stylesheet" href="/settings/assets/settings.css"><link rel="stylesheet" href="/settings/assets/dashboard.css"></head>
 <body><main class="shell dashboard-shell">
-<nav class="top-nav"><a class="active" href="/dashboard">대시보드</a><a href="/settings">연결 설정</a></nav>
+<nav class="top-nav"><a class="active" href="/dashboard">대시보드</a><a href="/documents">문서</a><a href="/settings">연결 설정</a></nav>
 <header class="dashboard-header"><div><p class="eyebrow">LLM-WIKI</p><h1>대시보드</h1><p class="intro">MCP 연결에 사용할 API 키를 직접 발급하고 관리합니다.</p></div><button id="logout-button" class="secondary" type="button">로그아웃</button></header>
 <section class="summary-grid" aria-label="서비스 요약"><article class="summary-card"><span>활성 API 키</span><strong id="key-count">—</strong></article><article class="summary-card"><span>MCP 엔드포인트</span><strong class="endpoint">https://mcp.lynply.com/mcp</strong></article></section>
 <section class="card"><div class="section-heading"><div><span>01</span><h2>API 키</h2></div><button id="open-create" class="primary compact" type="button">새 키 발급</button></div><p class="hint">키 원문은 발급 직후 한 번만 표시됩니다. 안전한 곳에 복사해 두세요.</p><div id="key-message" class="message" role="status" aria-live="polite"></div><div id="key-list" class="key-list"></div></section>

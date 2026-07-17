@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: mcp-app
-          image: docker.io/library/mcp-wiki-server:feedback-v3-20260717-1339
+          image: docker.io/library/mcp-wiki-server:async-indexing-20260717-2129
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

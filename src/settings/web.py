@@ -12,6 +12,7 @@ from src.api.middleware import _validate_api_key_cached
 from src.api_keys.auth import verify_auth_token
 from src.api_keys.service import ApiKeyService
 from src.settings.service import SettingsEncryptionError, UserSettingsService
+from src.settings.documents import DocumentBrowserService
 from src.retrieval.feedback import SearchFeedbackService
 from src.settings.oauth_session import (
     OAuthSessionError,
@@ -133,6 +134,11 @@ async def dashboard_page(knowledge_session: Optional[str] = Cookie(default=None)
     return await _protected_page("dashboard.html", knowledge_session)
 
 
+@settings_app.get("/documents", response_class=HTMLResponse, include_in_schema=False)
+async def documents_page(knowledge_session: Optional[str] = Cookie(default=None)):
+    return await _protected_page("documents.html", knowledge_session)
+
+
 @settings_app.get("/search-feedback", response_class=HTMLResponse, include_in_schema=False)
 async def search_feedback_page(knowledge_session: Optional[str] = Cookie(default=None)):
     return await _protected_page("feedback.html", knowledge_session)
@@ -250,6 +256,45 @@ def dashboard_js():
 @settings_app.get("/settings/assets/dashboard.css", include_in_schema=False)
 def dashboard_css():
     return Response((STATIC_DIR / "dashboard.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/settings/assets/documents.js", include_in_schema=False)
+def documents_js():
+    return Response((STATIC_DIR / "documents.js").read_text(encoding="utf-8"), media_type="application/javascript")
+
+
+@settings_app.get("/settings/assets/documents.css", include_in_schema=False)
+def documents_css():
+    return Response((STATIC_DIR / "documents.css").read_text(encoding="utf-8"), media_type="text/css")
+
+
+@settings_app.get("/api/documents")
+async def list_documents(
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    try:
+        return {"documents": DocumentBrowserService(owner_id).list_documents()}
+    except ConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@settings_app.get("/api/documents/{file_path:path}")
+async def read_document(
+    file_path: str,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    try:
+        return DocumentBrowserService(owner_id).read_document(file_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.") from exc
+    except ConnectionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @settings_app.get("/api/settings")
@@ -400,17 +445,19 @@ class SettingsPathDispatcher:
             await self._not_found(scope, receive, send)
             return
         if mcp_host and host == mcp_host and (
-            path in ("/dashboard", "/settings", "/search-feedback") or path.startswith("/search-feedback/") or path.startswith("/settings/") or
+            path in ("/dashboard", "/documents", "/settings", "/search-feedback") or path.startswith("/search-feedback/") or path.startswith("/settings/") or
             path.startswith("/api/settings") or path.startswith("/api/keys") or
+            path.startswith("/api/documents") or
             path.startswith("/api/search-feedback") or
             path in ("/callback", "/login", "/logout")
         ):
             await self._not_found(scope, receive, send)
             return
 
-        web_path = (path in ("/", "/health", "/dashboard", "/settings", "/search-feedback", "/callback", "/login", "/logout") or path.startswith("/search-feedback/") or
+        web_path = (path in ("/", "/health", "/dashboard", "/documents", "/settings", "/search-feedback", "/callback", "/login", "/logout") or path.startswith("/search-feedback/") or
                     path.startswith("/settings/") or path.startswith("/api/settings"))
         web_path = web_path or path.startswith("/api/keys")
+        web_path = web_path or path.startswith("/api/documents")
         web_path = web_path or path.startswith("/api/search-feedback")
         await (self.web_app if web_path else self.mcp_app)(scope, receive, send)
 

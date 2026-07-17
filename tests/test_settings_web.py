@@ -88,6 +88,46 @@ class SettingsWebTests(unittest.TestCase):
         self.assertIn("LLM-Wiki 대시보드", response.text)
         self.assertIn("새 키 발급", response.text)
 
+    def test_documents_page_is_protected_and_serves_local_assets(self):
+        unauthenticated = self.client.get("/documents", follow_redirects=False)
+        self.assertEqual(unauthenticated.status_code, 302)
+        self.assertEqual(unauthenticated.headers["location"], "/login")
+
+        response = self.client.get("/documents", cookies={"knowledge_session": "opaque-session"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("LLM-Wiki 문서", response.text)
+        self.assertIn("문서 검색", response.text)
+        self.assertEqual(self.client.get("/settings/assets/documents.js").status_code, 200)
+
+    @patch("src.settings.web.DocumentBrowserService")
+    @patch("src.settings.web._authenticated_user")
+    def test_document_list_is_scoped_to_authenticated_owner(self, authenticated_user, service_class):
+        authenticated_user.return_value = "USER_1"
+        service_class.return_value.list_documents.return_value = [
+            {"path": "qa/one.md", "name": "one.md", "section": "qa"},
+        ]
+
+        response = self.client.get("/api/documents")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["documents"][0]["path"], "qa/one.md")
+        service_class.assert_called_once_with("USER_1")
+
+    @patch("src.settings.web.DocumentBrowserService")
+    @patch("src.settings.web._authenticated_user")
+    def test_document_body_is_scoped_to_authenticated_owner(self, authenticated_user, service_class):
+        authenticated_user.return_value = "USER_2"
+        service_class.return_value.read_document.return_value = {
+            "path": "topics/Development/wiki.md", "name": "wiki.md", "content": "# Mine",
+        }
+
+        response = self.client.get("/api/documents/topics/Development/wiki.md")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["content"], "# Mine")
+        service_class.assert_called_once_with("USER_2")
+        service_class.return_value.read_document.assert_called_once_with("topics/Development/wiki.md")
+
     def test_search_feedback_has_a_dedicated_page(self):
         response = self.client.get("/search-feedback", cookies={"knowledge_session": "opaque-session"})
         self.assertEqual(response.status_code, 200)
@@ -174,6 +214,8 @@ class SettingsWebTests(unittest.TestCase):
             self.assertEqual(client.get("/settings", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/dashboard", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/search-feedback", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/documents", headers={"host": "mcp.lynply.com"}).status_code, 404)
+            self.assertEqual(client.get("/api/documents", headers={"host": "mcp.lynply.com"}).status_code, 404)
             self.assertEqual(client.post("/mcp", headers={"host": "knowledge.lynply.com"}).status_code, 404)
             self.assertEqual(client.get("/settings", headers={"host": "knowledge.lynply.com"}).status_code, 200)
         finally:
