@@ -16,6 +16,36 @@ class SearchFeedbackTests(unittest.TestCase):
         self.assertNotIn("AKIAABCDEFGHIJKLMNOP", redacted)
         self.assertGreaterEqual(redacted.count("[REDACTED]"), 3)
 
+    def test_record_event_snapshots_exposed_candidates_with_versions(self):
+        class Cursor:
+            def __init__(self):
+                self.executed = []
+                self.batch = []
+            def execute(self, statement, params=None):
+                self.executed.append((statement, params))
+            def executemany(self, statement, values):
+                self.batch.append((statement, values))
+        class Manager:
+            def __init__(self): self.cursor_value = Cursor()
+            @contextmanager
+            def transaction(self): yield self.cursor_value
+
+        manager = Manager()
+        service = SearchFeedbackService(
+            db_manager=manager, ranking_config_version="rank-v2", ontology_version="ontology-v1",
+        )
+        search_id = service.record_event("owner", "질문", [{
+            "file_path": "qa/a.md", "title": "A", "retrieval_kind": "direct",
+            "vector_similarity": 0.8, "rrf_score": 1.0, "matched_chunk_index": 2,
+        }])
+
+        self.assertTrue(search_id)
+        event_params = manager.cursor_value.executed[0][1]
+        self.assertIn("rank-v2", event_params)
+        self.assertIn("ontology-v1", event_params)
+        self.assertEqual(len(manager.cursor_value.batch[0][1]), 1)
+        self.assertEqual(manager.cursor_value.batch[0][1][0][2], "qa/a.md")
+
     def test_no_answer_cannot_include_relevant_paths(self):
         service = SearchFeedbackService(db_manager=object())
 
@@ -44,6 +74,23 @@ class SearchFeedbackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "동시에"):
             service.submit("owner", "search", [], [], True,
                            partially_relevant_paths=["qa/a.md"])
+
+    def test_result_feedback_validates_grade_and_issue_reason(self):
+        service = SearchFeedbackService(db_manager=object())
+        with self.assertRaisesRegex(ValueError, "0부터 3"):
+            service.submit("owner", "search", [], [], False, result_feedback=[{
+                "file_path": "qa/a.md", "relevance_grade": 4,
+            }])
+        with self.assertRaisesRegex(ValueError, "문서 문제 이유"):
+            service.submit("owner", "search", [], [], False, result_feedback=[{
+                "file_path": "qa/a.md", "relevance_grade": 2,
+                "issue_reasons": ["unknown_reason"],
+            }])
+
+    def test_behavior_action_is_validated_before_database_access(self):
+        service = SearchFeedbackService(db_manager=object())
+        with self.assertRaisesRegex(ValueError, "검색 행동"):
+            service.record_behavior("owner", "search", "hover")
 
     def test_graph_event_contains_document_and_chunk_nodes(self):
         class Cursor:

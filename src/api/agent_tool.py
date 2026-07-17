@@ -95,6 +95,7 @@ def submit_wiki_search_feedback(
     partially_relevant_paths: List[str] = None,
     satisfaction: Optional[str] = None,
     failure_reasons: List[str] = None,
+    result_feedback: List[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     config = current_user_config.get() or {}
     owner_id = config.get("user_id", "SYSTEM")
@@ -111,6 +112,7 @@ def submit_wiki_search_feedback(
             partially_relevant_paths=partially_relevant_paths or [],
             satisfaction=satisfaction,
             failure_reasons=failure_reasons or [],
+            result_feedback=result_feedback or [],
         )
     except KeyError as exc:
         raise InvalidArgumentException(str(exc)) from exc

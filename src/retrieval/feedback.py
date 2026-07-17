@@ -18,6 +18,11 @@ _FAILURE_REASONS = {
     "missing_answer", "irrelevant_results", "wrong_order",
     "insufficient_content", "intent_mismatch", "no_knowledge",
 }
+_RESULT_ISSUE_REASONS = {
+    "outdated", "superseded", "wrong_relation", "contradictory",
+    "unsafe", "insufficient", "unrelated",
+}
+_BEHAVIOR_ACTIONS = {"open", "copy", "cite", "follow_graph", "reformulate", "abandon"}
 
 
 def redact_search_query(query: str) -> str:
@@ -33,9 +38,14 @@ def redact_search_query(query: str) -> str:
 
 
 class SearchFeedbackService:
-    def __init__(self, db_manager=None, pipeline_version: str = "graph-context-confidence-v1"):
+    def __init__(
+        self, db_manager=None, pipeline_version: str = "graph-context-confidence-v1",
+        ranking_config_version: str = "retrieval-v1", ontology_version: str = "none",
+    ):
         self.db_manager = db_manager or DatabaseManager()
         self.pipeline_version = pipeline_version
+        self.ranking_config_version = ranking_config_version
+        self.ontology_version = ontology_version
 
     def initialize(self) -> None:
         run_database_migrations(self.db_manager)
@@ -47,17 +57,54 @@ class SearchFeedbackService:
             snapshots.append(self._snapshot(item, rank))
             for graph_item in item.get("graph_context", []):
                 snapshots.append(self._snapshot(graph_item, None))
-        with self.db_manager.cursor() as cur:
+        with self.db_manager.transaction() as cur:
             cur.execute("""
                 INSERT INTO knowledge_search_events (
                     search_id, owner_id, query_text, query_hash, returned_results,
-                    result_count, pipeline_version
-                ) VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s)
+                    result_count, pipeline_version, ranking_config_version,
+                    ontology_version, candidate_count, trace_sampled
+                ) VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, TRUE)
             """, (
                 search_id, owner_id, redact_search_query(query),
                 hashlib.sha256(query.encode("utf-8")).hexdigest(),
                 json.dumps(snapshots), len(snapshots), self.pipeline_version,
+                self.ranking_config_version, self.ontology_version, len(snapshots),
             ))
+            if snapshots:
+                candidate_sql = """
+                    INSERT INTO knowledge_search_candidates (
+                        search_id, owner_id, file_path, chunk_index, retrieval_sources,
+                        retrieval_kind, vector_score, lexical_score, rrf_score,
+                        reranker_score, pre_rule_rank, final_rank, exposed,
+                        relation_path, decision, score_components
+                    ) VALUES %s
+                """
+                values = []
+                for item in snapshots:
+                    rank = item.get("rank")
+                    relation_path = [{
+                        "sources": item.get("graph_sources", []),
+                        "target": item.get("graph_target", ""),
+                        "weight": item.get("graph_weight", 0.0),
+                    }] if item.get("retrieval_kind") == "graph" else []
+                    values.append((
+                        search_id, owner_id, item.get("file_path"), item.get("matched_chunk_index"),
+                        item.get("search_sources", []), item.get("retrieval_kind", "direct"),
+                        item.get("vector_similarity", 0.0), item.get("lexical_rank", 0.0),
+                        item.get("rrf_score", 0.0), item.get("reranker_score"), rank, rank,
+                        True, json.dumps(relation_path), "include", json.dumps({
+                            "vector": item.get("vector_similarity", 0.0),
+                            "lexical": item.get("lexical_rank", 0.0),
+                            "rrf": item.get("rrf_score", 0.0),
+                        }),
+                    ))
+                cur.executemany(
+                    candidate_sql.replace(
+                        "VALUES %s",
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s::jsonb)",
+                    ),
+                    values,
+                )
         return search_id
 
     @staticmethod
@@ -67,6 +114,7 @@ class SearchFeedbackService:
             "rank": rank, "vector_similarity": float(item.get("vector_similarity", 0.0)),
             "lexical_rank": float(item.get("lexical_rank", 0.0)),
             "rrf_score": float(item.get("rrf_score", 0.0)),
+            "reranker_score": item.get("reranker_score"),
             "retrieval_kind": item.get("retrieval_kind", "direct"),
             "search_sources": item.get("search_sources", []),
             "vector_chunk_index": item.get("vector_chunk_index"),
@@ -86,7 +134,20 @@ class SearchFeedbackService:
                        e.pipeline_version, e.created_at,
                        f.relevant_paths, f.irrelevant_paths, f.expected_no_answer,
                        f.missing_answer_path, f.notes, f.labeled_at,
-                       f.partially_relevant_paths, f.satisfaction, f.failure_reasons
+                       f.partially_relevant_paths, f.satisfaction, f.failure_reasons,
+                       e.ranking_config_version, e.ontology_version, e.candidate_count,
+                       COALESCE((
+                           SELECT jsonb_agg(jsonb_build_object(
+                               'file_path', rf.file_path,
+                               'relevance_grade', rf.relevance_grade,
+                               'issue_reasons', rf.issue_reasons,
+                               'preferred_replacement_path', rf.preferred_replacement_path,
+                               'relation_helpful', rf.relation_helpful,
+                               'notes', rf.notes
+                           ) ORDER BY rf.file_path)
+                           FROM knowledge_search_result_feedback rf
+                           WHERE rf.search_id = e.search_id AND rf.owner_id = e.owner_id
+                       ), '[]'::jsonb) AS result_feedback
                 FROM knowledge_search_events e
                 LEFT JOIN knowledge_search_feedback f
                   ON f.search_id = e.search_id AND f.owner_id = e.owner_id
@@ -169,13 +230,27 @@ class SearchFeedbackService:
         partially_relevant_paths: Optional[List[str]] = None,
         satisfaction: Optional[str] = None,
         failure_reasons: Optional[List[str]] = None,
+        result_feedback: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         partially_relevant_paths = partially_relevant_paths or []
         failure_reasons = failure_reasons or []
+        result_feedback = result_feedback or []
         if satisfaction not in (None, "satisfied", "partial", "dissatisfied"):
             raise ValueError("올바르지 않은 전체 만족도입니다.")
         if not set(failure_reasons) <= _FAILURE_REASONS:
             raise ValueError("올바르지 않은 불만족 이유입니다.")
+        feedback_paths = set()
+        for item in result_feedback:
+            path = item.get("file_path")
+            grade = item.get("relevance_grade")
+            reasons = set(item.get("issue_reasons") or [])
+            if not path or path in feedback_paths:
+                raise ValueError("문서별 평가는 서로 다른 유효한 경로여야 합니다.")
+            if not isinstance(grade, int) or isinstance(grade, bool) or not 0 <= grade <= 3:
+                raise ValueError("문서 관련도는 0부터 3 사이여야 합니다.")
+            if not reasons <= _RESULT_ISSUE_REASONS:
+                raise ValueError("올바르지 않은 문서 문제 이유입니다.")
+            feedback_paths.add(path)
         if expected_no_answer and (relevant_paths or partially_relevant_paths):
             raise ValueError("정답 없음과 정답 문서는 동시에 선택할 수 없습니다.")
         if set(relevant_paths) & set(irrelevant_paths):
@@ -195,6 +270,8 @@ class SearchFeedbackService:
             returned_paths = {item.get("file_path") for item in returned}
             if not set(relevant_paths + partially_relevant_paths + irrelevant_paths) <= returned_paths:
                 raise ValueError("반환되지 않은 문서는 relevant/irrelevant로 지정할 수 없습니다.")
+            if not feedback_paths <= returned_paths:
+                raise ValueError("반환되지 않은 문서는 평가할 수 없습니다.")
             cur.execute("""
                 INSERT INTO knowledge_search_feedback (
                     search_id, owner_id, relevant_paths, irrelevant_paths,
@@ -219,4 +296,46 @@ class SearchFeedbackService:
                 partially_relevant_paths, satisfaction, failure_reasons,
             ))
             labeled_at = cur.fetchone()[0]
+            cur.execute(
+                "DELETE FROM knowledge_search_result_feedback WHERE search_id = %s AND owner_id = %s",
+                (search_id, owner_id),
+            )
+            for item in result_feedback:
+                cur.execute("""
+                    INSERT INTO knowledge_search_result_feedback (
+                        search_id, owner_id, file_path, relevance_grade, issue_reasons,
+                        preferred_replacement_path, relation_helpful, notes
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    search_id, owner_id, item["file_path"], item["relevance_grade"],
+                    item.get("issue_reasons") or [], item.get("preferred_replacement_path") or None,
+                    item.get("relation_helpful"), item.get("notes") or None,
+                ))
         return {"search_id": search_id, "labeled_at": labeled_at.isoformat()}
+
+    def record_behavior(
+        self, owner_id: str, search_id: str, action: str,
+        file_path: Optional[str] = None, position: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        if action not in _BEHAVIOR_ACTIONS:
+            raise ValueError("올바르지 않은 검색 행동입니다.")
+        with self.db_manager.transaction() as cur:
+            cur.execute(
+                "SELECT returned_results FROM knowledge_search_events WHERE search_id = %s AND owner_id = %s",
+                (search_id, owner_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise KeyError("검색 이벤트를 찾을 수 없습니다.")
+            returned = row[0] if isinstance(row[0], list) else json.loads(row[0])
+            returned_paths = {item.get("file_path") for item in returned}
+            if file_path and file_path not in returned_paths:
+                raise ValueError("반환되지 않은 문서의 행동은 기록할 수 없습니다.")
+            cur.execute("""
+                INSERT INTO knowledge_search_behavior_events (
+                    search_id, owner_id, file_path, action, position
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING occurred_at
+            """, (search_id, owner_id, file_path, action, position))
+            occurred_at = cur.fetchone()[0]
+        return {"search_id": search_id, "occurred_at": occurred_at.isoformat()}

@@ -93,6 +93,10 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 검색 평가", response.text)
         self.assertIn("전체 만족도", (self.client.get("/settings/assets/feedback.js").text))
+        feedback_js = self.client.get("/settings/assets/feedback.js").text
+        self.assertIn("매우 도움", feedback_js)
+        self.assertIn("더 최신 문서가 있음", feedback_js)
+        self.assertIn("relation_helpful", feedback_js)
 
     def test_search_graph_page_loads_bundled_visualization(self):
         response = self.client.get("/search-feedback/event-1", cookies={"knowledge_session": "opaque-session"})
@@ -123,6 +127,24 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["events"][0]["search_id"], "event-1")
         service_class.return_value.list_recent.assert_called_once_with("USER_1", 10)
+
+    @patch("src.settings.web.SearchFeedbackService")
+    @patch("src.settings.web._authenticated_user")
+    def test_search_behavior_is_owner_scoped(self, authenticated_user, service_class):
+        authenticated_user.return_value = "USER_1"
+        service_class.return_value.record_behavior.return_value = {
+            "search_id": "event-1", "occurred_at": "2026-07-17T00:00:00+00:00",
+        }
+
+        response = self.client.post(
+            "/api/search-feedback/event-1/behavior",
+            json={"action": "follow_graph", "file_path": None, "position": None},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        service_class.return_value.record_behavior.assert_called_once_with(
+            "USER_1", "event-1", action="follow_graph", file_path=None, position=None,
+        )
 
     def test_secret_values_can_be_encrypted_and_decrypted(self):
         previous = os.environ.get("SETTINGS_ENCRYPTION_KEY")

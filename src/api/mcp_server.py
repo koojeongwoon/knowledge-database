@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 
 # 프로젝트 루트 디렉토리를 Python Path에 추가하여 절대 import 호환성 확보
@@ -59,6 +59,7 @@ def submit_search_feedback(
     partially_relevant_paths: Optional[List[str]] = None,
     satisfaction: Optional[str] = None,
     failure_reasons: Optional[List[str]] = None,
+    result_feedback: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """검색 결과에 대해 사용자가 직접 판정한 정답/오답/no-answer 라벨을 저장합니다."""
     return cast(str, submit_wiki_search_feedback(
@@ -71,6 +72,7 @@ def submit_search_feedback(
         partially_relevant_paths=partially_relevant_paths or [],
         satisfaction=satisfaction,
         failure_reasons=failure_reasons or [],
+        result_feedback=result_feedback or [],
     ))
 
 @mcp.tool(name="commit_new_knowledge")

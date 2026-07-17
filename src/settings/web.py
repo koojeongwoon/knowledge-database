@@ -38,6 +38,15 @@ class CreateApiKeyPayload(BaseModel):
     validity_days: int = Field(default=365, ge=1, le=3650)
 
 
+class SearchResultFeedbackPayload(BaseModel):
+    file_path: str = Field(min_length=1, max_length=512)
+    relevance_grade: int = Field(ge=0, le=3)
+    issue_reasons: List[str] = Field(default_factory=list, max_length=10)
+    preferred_replacement_path: Optional[str] = Field(default=None, max_length=512)
+    relation_helpful: Optional[bool] = None
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
 class SearchFeedbackPayload(BaseModel):
     relevant_paths: List[str] = Field(default_factory=list, max_length=20)
     partially_relevant_paths: List[str] = Field(default_factory=list, max_length=20)
@@ -47,6 +56,13 @@ class SearchFeedbackPayload(BaseModel):
     expected_no_answer: bool = False
     missing_answer_path: Optional[str] = Field(default=None, max_length=512)
     notes: Optional[str] = Field(default=None, max_length=2000)
+    result_feedback: List[SearchResultFeedbackPayload] = Field(default_factory=list, max_length=30)
+
+
+class SearchBehaviorPayload(BaseModel):
+    action: str = Field(pattern="^(open|copy|cite|follow_graph|reformulate|abandon)$")
+    file_path: Optional[str] = Field(default=None, max_length=512)
+    position: Optional[int] = Field(default=None, ge=1, le=1000)
 
 
 async def _authenticated_user(authorization: Optional[str], session_token: Optional[str] = None) -> str:
@@ -337,6 +353,25 @@ async def save_search_feedback(
     service = SearchFeedbackService()
     try:
         return service.submit(owner_id, search_id, **payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        service.db_manager.close()
+
+
+@settings_app.post("/api/search-feedback/{search_id}/behavior", status_code=status.HTTP_201_CREATED)
+async def save_search_behavior(
+    search_id: str,
+    payload: SearchBehaviorPayload,
+    authorization: Optional[str] = Header(default=None),
+    knowledge_session: Optional[str] = Cookie(default=None),
+):
+    owner_id = await _authenticated_user(authorization, knowledge_session)
+    service = SearchFeedbackService()
+    try:
+        return service.record_behavior(owner_id, search_id, **payload.model_dump())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

@@ -246,6 +246,84 @@ def _extend_search_feedback_labels(cur) -> None:
     """)
 
 
+def _create_search_feedback_telemetry(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_search_events
+        ADD COLUMN IF NOT EXISTS ranking_config_version VARCHAR(100) NOT NULL DEFAULT 'retrieval-v1',
+        ADD COLUMN IF NOT EXISTS ontology_version VARCHAR(100) NOT NULL DEFAULT 'none',
+        ADD COLUMN IF NOT EXISTS query_intent_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+        ADD COLUMN IF NOT EXISTS candidate_count INT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS trace_sampled BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS reformulated_from_search_id UUID REFERENCES knowledge_search_events(search_id);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_search_candidates (
+            id BIGSERIAL PRIMARY KEY,
+            search_id UUID NOT NULL REFERENCES knowledge_search_events(search_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            file_path TEXT NOT NULL,
+            chunk_index INT,
+            retrieval_sources TEXT[] NOT NULL DEFAULT '{}',
+            retrieval_kind VARCHAR(20) NOT NULL DEFAULT 'direct',
+            vector_score REAL NOT NULL DEFAULT 0,
+            lexical_score REAL NOT NULL DEFAULT 0,
+            rrf_score REAL NOT NULL DEFAULT 0,
+            reranker_score REAL,
+            pre_rule_rank INT,
+            final_rank INT,
+            exposed BOOLEAN NOT NULL DEFAULT FALSE,
+            matched_concept_ids TEXT[] NOT NULL DEFAULT '{}',
+            relation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+            applied_rule_ids TEXT[] NOT NULL DEFAULT '{}',
+            decision VARCHAR(20) NOT NULL DEFAULT 'include',
+            decision_reasons TEXT[] NOT NULL DEFAULT '{}',
+            score_components JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_search_candidate_decision CHECK (
+                decision IN ('include', 'boost', 'demote', 'exclude')
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_search_candidates_owner_search_idx
+        ON knowledge_search_candidates (owner_id, search_id);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_search_result_feedback (
+            id BIGSERIAL PRIMARY KEY,
+            search_id UUID NOT NULL REFERENCES knowledge_search_events(search_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            file_path TEXT NOT NULL,
+            relevance_grade SMALLINT NOT NULL,
+            issue_reasons TEXT[] NOT NULL DEFAULT '{}',
+            preferred_replacement_path TEXT,
+            relation_helpful BOOLEAN,
+            notes TEXT,
+            labeled_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_search_result_feedback UNIQUE (owner_id, search_id, file_path),
+            CONSTRAINT ck_search_result_relevance_grade CHECK (relevance_grade BETWEEN 0 AND 3)
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_search_behavior_events (
+            id BIGSERIAL PRIMARY KEY,
+            search_id UUID NOT NULL REFERENCES knowledge_search_events(search_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            file_path TEXT,
+            action VARCHAR(30) NOT NULL,
+            position INT,
+            occurred_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_search_behavior_action CHECK (
+                action IN ('open', 'copy', 'cite', 'follow_graph', 'reformulate', 'abandon')
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_search_behavior_owner_search_idx
+        ON knowledge_search_behavior_events (owner_id, search_id, occurred_at);
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -256,6 +334,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(7, "default_to_s3_storage", _default_to_s3_storage),
     Migration(8, "create_search_feedback", _create_search_feedback),
     Migration(9, "extend_search_feedback_labels", _extend_search_feedback_labels),
+    Migration(10, "create_search_feedback_telemetry", _create_search_feedback_telemetry),
 )
 
 
