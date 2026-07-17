@@ -34,8 +34,8 @@ mcp = FastMCP(
        개인 지식베이스 내의 정보 조회가 필요한 모든 질문을 하면,
        답변하기 전에 반드시 'search_wiki_knowledge' 도구를 실행하여 관련 정보를 먼저 검색하십시오.
     2. 새로운 지식, 노하우, 업무 규칙 등이 도출되거나 사용자가 지식 기록을 원하면 'commit_new_knowledge'를 사용하십시오.
-    3. 'commit_new_knowledge'는 작성한 파일을 자동 인덱싱합니다. 자동 인덱싱 실패 재시도나 외부에서 직접 수정한 파일에만
-       'run_database_indexing'을 호출하고, 대상 파일 경로만 전달하십시오.
+    3. 'commit_new_knowledge'는 파일을 저장하고 비동기 인덱싱 작업을 등록합니다. 외부에서 직접 수정한 파일을
+       즉시 반영해야 할 때만 'run_database_indexing'을 호출하고, 대상 파일 경로만 전달하십시오.
     """
 )
 
@@ -88,7 +88,7 @@ def commit_new_knowledge(
     """
     새롭게 습득하거나 정리된 지식을 로컬 QA 저널(qa/)에 파일로 기록하고,
     선택적으로 기존 공통 개념 토픽(topics/) 문서에 누적 합성한 뒤
-    실제로 작성한 마크다운 파일만 자동 인덱싱합니다.
+    실제로 작성한 마크다운 파일만 비동기 인덱싱 큐에 등록합니다.
     """
     return cast(
         str,
@@ -109,8 +109,8 @@ def run_database_indexing(file_paths: List[str]) -> str:
     지정한 마크다운 파일들의 변경 사항만 감지하여
     데이터베이스에 실시간으로 증분 인덱싱(임베딩)합니다.
 
-    자동 인덱싱 실패 시 반환된 retry_targets 또는 외부에서 직접 수정한
-    마크다운 파일 경로만 file_paths로 전달합니다.
+    외부에서 직접 수정한 마크다운 파일을 즉시 반영해야 할 때
+    해당 파일 경로만 file_paths로 전달합니다.
     """
     return run_wiki_indexing(file_paths=file_paths)
 

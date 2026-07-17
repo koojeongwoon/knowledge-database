@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: knowledge-indexing-worker
+  namespace: llm-wiki
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: knowledge-indexing-worker
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: indexing-worker
+              image: docker.io/library/mcp-wiki-server:feedback-v3-20260717-1339
+              imagePullPolicy: IfNotPresent
+              command: ["python", "main.py", "retry-indexing", "--limit", "100"]
+              env:
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-secrets
+                      key: knowledge-password
+                - name: REDIS_WIKI_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-secrets
+                      key: redis-password
+                - name: REDIS_CACHE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-secrets
+                      key: redis-cache-password
+                - name: REDIS_STREAM_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-secrets
+                      key: redis-stream-password
+                - name: SETTINGS_ENCRYPTION_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-secrets
+                      key: settings-encryption-key
+                - name: KNOWLEDGE_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: mcp-secrets
+                      key: knowledge-client-secret
+                - name: HF_HOME
+                  value: /tmp/huggingface
+              envFrom:
+                - configMapRef:
+                    name: mcp-config
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "200m"
+                limits:
+                  memory: "2Gi"
+                  cpu: "1"

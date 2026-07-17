@@ -169,43 +169,27 @@ def commit_wiki_knowledge(
             "retry_targets": [],
         }
         if written_paths:
-            queue_db = DatabaseManager()
             from src.indexing.infrastructure.job_repository import IndexingJobRepository
-            job_repository = IndexingJobRepository(queue_db)
+            queue_db = None
             try:
+                queue_db = DatabaseManager()
+                job_repository = IndexingJobRepository(queue_db)
                 job_repository.enqueue(written_paths)
-                job_repository.start(written_paths)
-                indexing_response = json.loads(run_wiki_indexing(file_paths=written_paths))
-                if indexing_response.get("success"):
-                    job_repository.complete(written_paths)
-                    indexing = {
-                        "status": "success",
-                        "indexed_files": written_paths,
-                        "retry_targets": [],
-                        "stats": indexing_response.get("data"),
-                    }
-                else:
-                    error = indexing_response.get("message") or "Indexing failed"
-                    job_repository.fail(written_paths, error)
-                    indexing = {
-                        "status": "failed",
-                        "indexed_files": [],
-                        "retry_targets": written_paths,
-                        "error": error,
-                    }
-            except Exception as indexing_error:
-                try:
-                    job_repository.fail(written_paths, str(indexing_error))
-                except Exception:
-                    pass
                 indexing = {
-                    "status": "failed",
+                    "status": "queued",
                     "indexed_files": [],
-                    "retry_targets": written_paths,
-                    "error": str(indexing_error),
+                    "retry_targets": [],
+                    "queued_files": written_paths,
                 }
+            except Exception as queue_error:
+                saved_paths = ", ".join(written_paths)
+                raise DatabaseException(
+                    "지식 파일은 저장되었지만 인덱싱 작업 등록에 실패했습니다. "
+                    f"저장된 파일: {saved_paths}. 원인: {queue_error}"
+                ) from queue_error
             finally:
-                queue_db.close()
+                if queue_db is not None:
+                    queue_db.close()
         
         # 지식 저널 생성 및 합성 성공 감사 로그 기록
         log_audit(

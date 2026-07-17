@@ -165,7 +165,7 @@ uv run python main.py retry-indexing --limit 100
 uv run python main.py retry-indexing --limit 100 --force
 ```
 
-`retry-indexing`은 스케줄러/CronJob용 운영 명령입니다. `commit_new_knowledge`는 실제로 쓴 파일만 자동 인덱싱하고 실패한 대상은 DB 큐에 기록합니다.
+`retry-indexing`은 스케줄러/CronJob용 운영 명령입니다. `commit_new_knowledge`는 실제로 쓴 파일을 저장하고 DB 큐에 등록한 뒤 즉시 반환하며, 인덱싱은 스케줄러가 비동기로 처리합니다.
 
 ## MCP와 웹 API
 
@@ -191,8 +191,8 @@ MCP 클라이언트는 인증 API 키를 Bearer token으로 전달합니다.
 | --- | --- |
 | `search_wiki_knowledge` | 하이브리드 검색. 응답에 `Search Event ID` 포함 |
 | `submit_search_feedback` | 검색 결과의 relevant/irrelevant/no-answer/missing-answer 라벨 저장 |
-| `commit_new_knowledge` | 지식 기록 후 변경 파일 자동 인덱싱 |
-| `run_database_indexing` | 자동 인덱싱 실패 또는 외부 수정 파일의 지정 증분 인덱싱 |
+| `commit_new_knowledge` | 지식 기록 후 변경 파일의 비동기 인덱싱 등록 |
+| `run_database_indexing` | 외부 수정 파일을 즉시 반영하는 지정 증분 인덱싱 |
 
 주요 웹 endpoint:
 
@@ -260,4 +260,4 @@ Blind 파일과 결과는 Git ignore 대상입니다. 최근 Blind-v2 결과는 
 
 1. 개인 지식이 필요한 요청은 먼저 `search_wiki_knowledge`로 검색합니다.
 2. 새 지식이나 업무 규칙은 `commit_new_knowledge`로 기록합니다.
-3. `commit_new_knowledge`가 자동 인덱싱하므로, 실패 재시도나 외부 수정 파일에만 `run_database_indexing(file_paths=[...])`을 사용합니다.
+3. `commit_new_knowledge`가 비동기 인덱싱 작업을 등록하므로, 외부 수정 파일을 즉시 반영할 때만 `run_database_indexing(file_paths=[...])`을 사용합니다.
