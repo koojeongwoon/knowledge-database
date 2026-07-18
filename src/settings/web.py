@@ -55,7 +55,16 @@ class SearchResultFeedbackPayload(BaseModel):
     issue_reasons: List[str] = Field(default_factory=list, max_length=10)
     preferred_replacement_path: Optional[str] = Field(default=None, max_length=512)
     relation_helpful: Optional[bool] = None
+    ontology_context_grade: Optional[int] = Field(default=None, ge=0, le=3)
+    relation_path_correct: Optional[bool] = None
+    rule_application_correct: Optional[bool] = None
     notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ExpectedRelationPayload(BaseModel):
+    subject: str = Field(min_length=1, max_length=300)
+    predicate: str = Field(min_length=1, max_length=40)
+    object: str = Field(min_length=1, max_length=300)
 
 
 class SearchFeedbackPayload(BaseModel):
@@ -67,6 +76,11 @@ class SearchFeedbackPayload(BaseModel):
     expected_no_answer: bool = False
     missing_answer_path: Optional[str] = Field(default=None, max_length=512)
     notes: Optional[str] = Field(default=None, max_length=2000)
+    expected_relations: List[ExpectedRelationPayload] = Field(default_factory=list, max_length=20)
+    expected_graph_paths: List[List[str]] = Field(default_factory=list, max_length=20)
+    forbidden_paths: List[str] = Field(default_factory=list, max_length=20)
+    expected_rule_types: List[str] = Field(default_factory=list, max_length=10)
+    ontology_notes: Optional[str] = Field(default=None, max_length=2000)
     result_feedback: List[SearchResultFeedbackPayload] = Field(default_factory=list, max_length=30)
 
 

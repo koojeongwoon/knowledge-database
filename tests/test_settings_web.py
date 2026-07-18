@@ -25,6 +25,9 @@ class SettingsWebTests(unittest.TestCase):
     def tearDown(self):
         self.store_patcher.stop()
 
+    def authenticate(self, session_id="opaque-session"):
+        self.client.cookies.set("knowledge_session", session_id)
+
     def test_public_routes_are_available_without_redirecting_root(self):
         root = self.client.get("/")
         self.assertEqual(root.status_code, 200)
@@ -70,20 +73,23 @@ class SettingsWebTests(unittest.TestCase):
         self.assertNotIn("sensitive-state-detail", output)
 
     def test_settings_page_is_available_with_valid_server_session(self):
-        response = self.client.get("/settings", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/settings")
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 설정", response.text)
         self.assertIn("등록·수정", response.text)
         self.store.resolve.assert_awaited_once_with("opaque-session")
 
     def test_settings_edit_is_separate_from_read_only_page(self):
-        response = self.client.get("/settings/edit", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/settings/edit")
         self.assertEqual(response.status_code, 200)
         self.assertIn("OpenAI API Key", response.text)
         self.assertIn("settings-form", response.text)
 
     def test_dashboard_is_the_authenticated_landing_page(self):
-        response = self.client.get("/dashboard", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/dashboard")
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 대시보드", response.text)
         self.assertIn("새 키 발급", response.text)
@@ -93,7 +99,8 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(unauthenticated.status_code, 302)
         self.assertEqual(unauthenticated.headers["location"], "/login")
 
-        response = self.client.get("/documents", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/documents")
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 문서", response.text)
         self.assertIn("문서 검색", response.text)
@@ -102,7 +109,8 @@ class SettingsWebTests(unittest.TestCase):
     def test_inbox_page_is_protected_and_serves_upload_ui(self):
         unauthenticated = self.client.get("/inbox", follow_redirects=False)
         self.assertEqual(unauthenticated.status_code, 302)
-        response = self.client.get("/inbox", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/inbox")
         self.assertEqual(response.status_code, 200)
         self.assertIn("파일 올리기", response.text)
         self.assertIn("링크 보관", response.text)
@@ -111,7 +119,8 @@ class SettingsWebTests(unittest.TestCase):
     def test_learning_dashboard_is_protected_and_serves_local_assets(self):
         unauthenticated = self.client.get("/learning", follow_redirects=False)
         self.assertEqual(unauthenticated.status_code, 302)
-        response = self.client.get("/learning", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/learning")
         self.assertEqual(response.status_code, 200)
         self.assertIn("학습 현황", response.text)
         self.assertIn("실제 이해도의 정답이 아닙니다", response.text)
@@ -190,7 +199,8 @@ class SettingsWebTests(unittest.TestCase):
         service_class.return_value.read_document.assert_called_once_with("topics/Development/wiki.md")
 
     def test_search_feedback_has_a_dedicated_page(self):
-        response = self.client.get("/search-feedback", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/search-feedback")
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 검색 평가", response.text)
         self.assertIn("전체 만족도", (self.client.get("/settings/assets/feedback.js").text))
@@ -200,7 +210,8 @@ class SettingsWebTests(unittest.TestCase):
         self.assertIn("relation_helpful", feedback_js)
 
     def test_search_graph_page_loads_bundled_visualization(self):
-        response = self.client.get("/search-feedback/event-1", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.get("/search-feedback/event-1")
         self.assertEqual(response.status_code, 200)
         self.assertIn("검색 그래프", response.text)
         asset = self.client.get("/settings/assets/cytoscape-3.34.0.min.js")
@@ -208,7 +219,8 @@ class SettingsWebTests(unittest.TestCase):
         self.assertGreater(len(asset.content), 400000)
 
     def test_logout_revokes_server_session(self):
-        response = self.client.post("/logout", cookies={"knowledge_session": "opaque-session"})
+        self.authenticate()
+        response = self.client.post("/logout")
         self.assertEqual(response.status_code, 200)
         self.store.revoke.assert_called_once_with("opaque-session")
 

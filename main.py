@@ -2,7 +2,7 @@ import argparse
 import json
 import sys
 from src.core.database.factory import DatabaseManager
-from src.indexing.application.service import WikiIndexer
+from src.indexing.composition import create_wiki_indexer
 from src.retrieval.application.service import WikiSearcher
 from src.core.config import EMBEDDING_DIM, EMBEDDING_PROVIDER
 from src.core.config import current_user_config
@@ -44,7 +44,7 @@ def cmd_index(args):
     db_manager = DatabaseManager()
     try:
         embedding_service = get_embedding_service()
-        indexer = WikiIndexer(root_dir="", db_manager=db_manager, embedding_service=embedding_service)
+        indexer = create_wiki_indexer(db_manager, embedding_service)
         stats = indexer.run_indexing()
         print("\n=== Indexing Summary ===")
         print(f"  Created: {stats['created']}")
@@ -182,6 +182,22 @@ def cmd_score_blind_search(args):
     print(rendered)
 
 
+def cmd_check_direct_regression(args):
+    from pathlib import Path
+    from src.retrieval.evaluation import compare_direct_regression
+
+    baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+    candidate = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
+    gates = json.loads(Path(args.gates).read_text(encoding="utf-8"))
+    report = compare_direct_regression(
+        baseline["summary"], candidate["summary"], gates["direct_maximum_regressions"],
+    )
+    rendered = json.dumps(report, ensure_ascii=False, indent=2)
+    print(rendered)
+    if not report["passed"]:
+        sys.exit(1)
+
+
 def cmd_generate_blind_search(args):
     from src.retrieval.blind_dataset import generate_blind_dataset
 
@@ -283,6 +299,14 @@ def main():
     blind_generate_parser.add_argument("--exclude-answers", action="append", default=[])
     blind_generate_parser.add_argument("--query-types", default="exact,semantic,cross-language,acronym,mixed-language")
 
+    regression_parser = subparsers.add_parser(
+        "check-direct-regression",
+        help="Reject an ontology candidate report when direct search metrics regress",
+    )
+    regression_parser.add_argument("--baseline", default="tests/direct_search_baseline.json")
+    regression_parser.add_argument("--candidate", required=True)
+    regression_parser.add_argument("--gates", default="tests/ontology_quality_gates.json")
+
     diagnose_parser = subparsers.add_parser("diagnose-search-stages", help="Trace expected documents through retrieval stages")
     diagnose_parser.add_argument("--owner-id", required=True)
     diagnose_parser.add_argument("--queries", required=True)
@@ -307,6 +331,8 @@ def main():
         cmd_score_blind_search(args)
     elif args.command == "generate-blind-search":
         cmd_generate_blind_search(args)
+    elif args.command == "check-direct-regression":
+        cmd_check_direct_regression(args)
     elif args.command == "diagnose-search-stages":
         cmd_diagnose_search_stages(args)
 

@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # 문서 확장 (Document Expansion) 설정
     document_expansion_enabled: bool = Field(default=False, validation_alias="DOCUMENT_EXPANSION_ENABLED")
 
+    # Ontology rollout stages. Every stage is off by default so direct retrieval
+    # remains byte-for-byte independent until a later promotion decision.
+    ontology_indexing_enabled: bool = Field(default=False, validation_alias="ONTOLOGY_INDEXING_ENABLED")
+    ontology_shadow_enabled: bool = Field(default=False, validation_alias="ONTOLOGY_SHADOW_ENABLED")
+    ontology_context_enabled: bool = Field(default=False, validation_alias="ONTOLOGY_CONTEXT_ENABLED")
+    ontology_ranking_enabled: bool = Field(default=False, validation_alias="ONTOLOGY_RANKING_ENABLED")
+    ontology_hard_rules_enabled: bool = Field(default=False, validation_alias="ONTOLOGY_HARD_RULES_ENABLED")
+
     # ── Redis 설정 ────────────────────────────────────────────────────────
     # Redis Cache (세션 공유, 임시 캐싱)
     redis_cache_host: str = Field(default="redis-cache-service.infra.svc.cluster.local", validation_alias="REDIS_CACHE_HOST")
@@ -108,6 +116,11 @@ GRAPH_CONTEXT_LIMIT = settings.graph_context_limit
 RERANKER_ENABLED = settings.reranker_enabled
 RERANKER_MODEL = settings.reranker_model
 DOCUMENT_EXPANSION_ENABLED = settings.document_expansion_enabled
+ONTOLOGY_INDEXING_ENABLED = settings.ontology_indexing_enabled
+ONTOLOGY_SHADOW_ENABLED = settings.ontology_shadow_enabled
+ONTOLOGY_CONTEXT_ENABLED = settings.ontology_context_enabled
+ONTOLOGY_RANKING_ENABLED = settings.ontology_ranking_enabled
+ONTOLOGY_HARD_RULES_ENABLED = settings.ontology_hard_rules_enabled
 
 import contextvars
 current_user_config = contextvars.ContextVar("current_user_config", default={})

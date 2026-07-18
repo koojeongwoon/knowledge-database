@@ -4,7 +4,7 @@ import statistics
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Mapping
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,29 @@ class BlindQuery:
     query_type: str = "semantic"
 
 
+@dataclass(frozen=True)
+class RelationExpectation:
+    subject: str
+    predicate: str
+    object: str
+
+
+@dataclass(frozen=True)
+class OntologyEvaluationCase:
+    case_id: str
+    query: str
+    expected_direct_paths: tuple[str, ...] = ()
+    expected_context_paths: tuple[str, ...] = ()
+    forbidden_paths: tuple[str, ...] = ()
+    expected_relations: tuple[RelationExpectation, ...] = ()
+    expected_rules: tuple[str, ...] = ()
+    expected_no_answer: bool = False
+    query_type: str = "relation"
+    evidence_paths: tuple[str, ...] = ()
+    rationale: str = ""
+    review_status: str = "draft"
+
+
 def load_evaluation_cases(path: str) -> List[EvaluationCase]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     return [
@@ -35,6 +58,159 @@ def load_evaluation_cases(path: str) -> List[EvaluationCase]:
         )
         for item in payload["cases"]
     ]
+
+
+def load_ontology_evaluation_cases(path: str) -> List[OntologyEvaluationCase]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if payload.get("kind") != "ontology-search-evaluation":
+        raise ValueError("Ontology evaluation set must declare kind='ontology-search-evaluation'.")
+    cases = []
+    seen_ids = set()
+    for item in payload.get("cases", []):
+        case_id = item.get("id")
+        query = item.get("query")
+        if not case_id or case_id in seen_ids:
+            raise ValueError("Ontology evaluation case IDs must be non-empty and unique.")
+        if not query:
+            raise ValueError(f"Ontology evaluation case '{case_id}' must include a query.")
+        seen_ids.add(case_id)
+        direct = tuple(item.get("expected_direct_paths", []))
+        context = tuple(item.get("expected_context_paths", []))
+        forbidden = tuple(item.get("forbidden_paths", []))
+        if set(direct) & set(forbidden) or set(context) & set(forbidden):
+            raise ValueError(f"Ontology case '{case_id}' cannot expect and forbid the same path.")
+        expected_no_answer = bool(item.get("expected_no_answer", False))
+        if expected_no_answer and (direct or context):
+            raise ValueError(f"Ontology case '{case_id}' cannot combine no-answer with expected paths.")
+        relations = tuple(RelationExpectation(
+            subject=relation["subject"],
+            predicate=relation["predicate"],
+            object=relation["object"],
+        ) for relation in item.get("expected_relations", []))
+        review_status = item.get("review_status", "draft")
+        if review_status not in {"draft", "verified"}:
+            raise ValueError(
+                f"Ontology case '{case_id}' has invalid review_status '{review_status}'."
+            )
+        cases.append(OntologyEvaluationCase(
+            case_id=case_id,
+            query=query,
+            expected_direct_paths=direct,
+            expected_context_paths=context,
+            forbidden_paths=forbidden,
+            expected_relations=relations,
+            expected_rules=tuple(item.get("expected_rules", [])),
+            expected_no_answer=expected_no_answer,
+            query_type=item.get("query_type", "relation"),
+            evidence_paths=tuple(item.get("evidence_paths", [])),
+            rationale=item.get("rationale", ""),
+            review_status=review_status,
+        ))
+    if not cases:
+        raise ValueError("Ontology evaluation set must contain at least one case.")
+    return cases
+
+
+def evaluate_ontology_search(
+    cases: List[OntologyEvaluationCase],
+    search: Callable[[str, int], Mapping[str, Any]],
+    limit: int = 5,
+) -> Dict[str, Any]:
+    """Score direct preservation and ontology-only signals without mixing their ranks."""
+    case_results = []
+    direct_answer_cases = direct_top1_hits = direct_recall_hits = 0
+    context_expected = context_hits = 0
+    relation_expected = relation_hits = 0
+    rule_expected = rule_hits = 0
+    forbidden_expected = forbidden_exposures = 0
+    no_answer_expected = no_answer_hits = 0
+
+    for case in cases:
+        output = dict(search(case.query, limit))
+        direct_paths = list(output.get("direct_paths", []))[:limit]
+        context_paths = list(output.get("context_paths", []))
+        exposed_paths = set(direct_paths + context_paths)
+        actual_relations = {
+            (item.get("subject"), item.get("predicate"), item.get("object"))
+            for item in output.get("relations", [])
+        }
+        actual_rules = set(output.get("applied_rules", []))
+
+        direct_rank = None
+        if case.expected_direct_paths:
+            direct_answer_cases += 1
+            direct_rank = next((index for index, path in enumerate(direct_paths, 1)
+                                if path in case.expected_direct_paths), None)
+            direct_top1_hits += int(direct_rank == 1)
+            direct_recall_hits += int(direct_rank is not None)
+
+        expected_context = set(case.expected_context_paths)
+        context_expected += len(expected_context)
+        context_hits += len(expected_context & set(context_paths))
+
+        expected_relation_set = {
+            (item.subject, item.predicate, item.object) for item in case.expected_relations
+        }
+        relation_expected += len(expected_relation_set)
+        relation_hits += len(expected_relation_set & actual_relations)
+
+        expected_rules = set(case.expected_rules)
+        rule_expected += len(expected_rules)
+        rule_hits += len(expected_rules & actual_rules)
+
+        forbidden = set(case.forbidden_paths)
+        forbidden_expected += len(forbidden)
+        forbidden_exposures += len(forbidden & exposed_paths)
+
+        if case.expected_no_answer:
+            no_answer_expected += 1
+            no_answer_hits += int(not exposed_paths)
+
+        case_results.append({
+            "id": case.case_id,
+            "query_type": case.query_type,
+            "direct_rank": direct_rank,
+            "direct_paths": direct_paths,
+            "context_paths": context_paths,
+            "forbidden_exposed": sorted(forbidden & exposed_paths),
+            "missing_relations": sorted(expected_relation_set - actual_relations),
+            "missing_rules": sorted(expected_rules - actual_rules),
+        })
+
+    ratio = lambda hits, total: hits / total if total else 0.0
+    return {
+        "summary": {
+            "cases": len(cases),
+            "direct_top1_accuracy": ratio(direct_top1_hits, direct_answer_cases),
+            f"direct_recall_at_{limit}": ratio(direct_recall_hits, direct_answer_cases),
+            "ontology_context_recall": ratio(context_hits, context_expected),
+            "relation_recall": ratio(relation_hits, relation_expected),
+            "rule_recall": ratio(rule_hits, rule_expected),
+            "forbidden_exposure_rate": ratio(forbidden_exposures, forbidden_expected),
+            "no_answer_recall": ratio(no_answer_hits, no_answer_expected),
+        },
+        "cases": case_results,
+    }
+
+
+def compare_direct_regression(
+    baseline: Mapping[str, float],
+    candidate: Mapping[str, float],
+    maximum_regressions: Mapping[str, float],
+) -> Dict[str, Any]:
+    checks = {}
+    for metric, maximum_drop in maximum_regressions.items():
+        if metric not in baseline or metric not in candidate:
+            raise ValueError(f"Missing direct regression metric: {metric}")
+        drop = float(baseline[metric]) - float(candidate[metric])
+        checks[metric] = {
+            "baseline": float(baseline[metric]),
+            "candidate": float(candidate[metric]),
+            "maximum_drop": float(maximum_drop),
+            "actual_drop": round(drop, 6),
+            "passed": drop <= float(maximum_drop),
+        }
+    return {"passed": all(item["passed"] for item in checks.values()), "checks": checks}
 
 
 def load_blind_queries(path: str) -> List[BlindQuery]:

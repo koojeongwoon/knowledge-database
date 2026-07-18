@@ -81,6 +81,22 @@ class SearchFeedbackTests(unittest.TestCase):
             service.submit("owner", "search", [], [], False, result_feedback=[{
                 "file_path": "qa/a.md", "relevance_grade": 4,
             }])
+
+    def test_ontology_feedback_contract_is_validated_before_database_access(self):
+        service = SearchFeedbackService(db_manager=object())
+        with self.assertRaisesRegex(ValueError, "관계 유형"):
+            service.submit("owner", "search", [], [], False, expected_relations=[{
+                "subject": "service", "predicate": "causes", "object": "outage",
+            }])
+        with self.assertRaisesRegex(ValueError, "그래프 경로"):
+            service.submit("owner", "search", [], [], False, expected_graph_paths=[["one"]])
+        with self.assertRaisesRegex(ValueError, "기대 규칙"):
+            service.submit("owner", "search", [], [], False, expected_rule_types=["magic"])
+        with self.assertRaisesRegex(ValueError, "맥락 관련도"):
+            service.submit("owner", "search", [], [], False, result_feedback=[{
+                "file_path": "qa/a.md", "relevance_grade": 2,
+                "ontology_context_grade": 4,
+            }])
         with self.assertRaisesRegex(ValueError, "문서 문제 이유"):
             service.submit("owner", "search", [], [], False, result_feedback=[{
                 "file_path": "qa/a.md", "relevance_grade": 2,

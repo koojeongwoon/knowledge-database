@@ -288,6 +288,11 @@ def submit_search_feedback(
     satisfaction: Optional[str] = None,
     failure_reasons: Optional[List[str]] = None,
     result_feedback: Optional[List[Dict[str, Any]]] = None,
+    expected_relations: Optional[List[Dict[str, str]]] = None,
+    expected_graph_paths: Optional[List[List[str]]] = None,
+    forbidden_paths: Optional[List[str]] = None,
+    expected_rule_types: Optional[List[str]] = None,
+    ontology_notes: Optional[str] = None,
 ) -> str:
     """검색 결과에 대해 사용자가 직접 판정한 정답/오답/no-answer 라벨을 저장합니다."""
     return cast(str, submit_wiki_search_feedback(
@@ -301,6 +306,11 @@ def submit_search_feedback(
         satisfaction=satisfaction,
         failure_reasons=failure_reasons or [],
         result_feedback=result_feedback or [],
+        expected_relations=expected_relations or [],
+        expected_graph_paths=expected_graph_paths or [],
+        forbidden_paths=forbidden_paths or [],
+        expected_rule_types=expected_rule_types or [],
+        ontology_notes=ontology_notes,
     ))
 
 @mcp.tool(name="commit_new_knowledge")

@@ -16,6 +16,14 @@ const resultIssues = [
   ["unsafe", "노출되면 안 됨"], ["insufficient", "내용 부족"],
   ["unrelated", "질문과 무관"],
 ];
+const ontologyRules = [
+  ["prefer_current", "최신 지식을 우선해야 함"],
+  ["expose_conflict", "충돌하는 근거를 함께 보여야 함"],
+  ["prohibit", "금지된 결과를 제외해야 함"],
+  ["expand_relation", "관계를 따라 관련 지식을 확장해야 함"],
+  ["none", "특별한 온톨로지 규칙이 필요 없음"],
+];
+const predicateLabels = "uses, depends_on, is_a, part_of, supersedes, contradicts, prohibits, requires, related_to";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -97,6 +105,19 @@ function renderResult(event, result, index) {
       radio(relationName, "", "모르겠음", feedback?.relation_helpful == null),
     );
     row.append(relation);
+    const contextGrade = el("div", "relation-feedback");
+    contextGrade.append(el("span", "field-label", "관계로 추가된 맥락의 관련도"));
+    const contextName = `ontology-context-${event.search_id}-${index}`;
+    [[3, "매우 관련"], [2, "부분 관련"], [1, "약간 관련"], [0, "무관"], ["", "미평가"]]
+      .forEach(([value, label]) => contextGrade.append(radio(contextName, String(value), label, feedback?.ontology_context_grade === value || (value === "" && feedback?.ontology_context_grade == null))));
+    row.append(contextGrade);
+    [["relation-correct", "관계 경로가 정확한가요?", feedback?.relation_path_correct], ["rule-correct", "적용된 규칙이 정확한가요?", feedback?.rule_application_correct]].forEach(([role, label, value]) => {
+      const block = el("div", "relation-feedback");
+      block.append(el("span", "field-label", label));
+      const fieldName = `${role}-${event.search_id}-${index}`;
+      block.append(radio(fieldName, "true", "예", value === true), radio(fieldName, "false", "아니요", value === false), radio(fieldName, "", "모르겠음", value == null));
+      row.append(block);
+    });
   }
   return row;
 }
@@ -138,6 +159,34 @@ function render(events) {
     )));
     why.append(failureBox);
     card.append(why);
+
+    const ontology = el("div", "evaluation-block ontology-feedback");
+    ontology.append(el("h3", "", "온톨로지 기대값 (선택)"));
+    ontology.append(el("p", "hint", `관계는 한 줄에 하나씩 '주체 | 관계 | 대상'으로 입력하세요. 관계 유형: ${predicateLabels}`));
+    const expectedRelations = el("textarea");
+    expectedRelations.dataset.role = "expected-relations";
+    expectedRelations.placeholder = "서비스A | depends_on | PostgreSQL";
+    expectedRelations.value = (event.expected_relations || []).map(item => `${item.subject} | ${item.predicate} | ${item.object}`).join("\n");
+    ontology.append(expectedRelations);
+    const graphPaths = el("textarea");
+    graphPaths.dataset.role = "expected-graph-paths";
+    graphPaths.placeholder = "기대 경로: 질문 > 서비스A > PostgreSQL (한 줄에 하나)";
+    graphPaths.value = (event.expected_graph_paths || []).map(path => path.join(" > ")).join("\n");
+    ontology.append(graphPaths);
+    const forbidden = el("textarea");
+    forbidden.dataset.role = "forbidden-paths";
+    forbidden.placeholder = "노출되면 안 되는 문서 경로 (한 줄에 하나)";
+    forbidden.value = (event.forbidden_paths || []).join("\n");
+    ontology.append(forbidden);
+    const rules = el("div", "failure-options");
+    ontologyRules.forEach(([value, label]) => rules.append(checkbox(value, label, (event.expected_rule_types || []).includes(value), "ontology-rule")));
+    ontology.append(rules);
+    const ontologyNotes = el("textarea");
+    ontologyNotes.dataset.role = "ontology-notes";
+    ontologyNotes.placeholder = "관계·경로·금기 판단 메모 (선택)";
+    ontologyNotes.value = event.ontology_notes || "";
+    ontology.append(ontologyNotes);
+    card.append(ontology);
 
     const noAnswer = el("label", "no-answer-option");
     const no = el("input");
@@ -187,13 +236,24 @@ async function saveEvent(card, button) {
     if (grade === 2 || grade === 1) groups.partially_relevant_paths.push(row.dataset.path);
     if (grade === 0) groups.irrelevant_paths.push(row.dataset.path);
     const relationValue = row.querySelector("input[name^=relation-]:checked")?.value;
+    const contextValue = row.querySelector("input[name^=ontology-context-]:checked")?.value;
+    const relationCorrect = row.querySelector("input[name^=relation-correct-]:checked")?.value;
+    const ruleCorrect = row.querySelector("input[name^=rule-correct-]:checked")?.value;
     resultFeedback.push({
       file_path: row.dataset.path,
       relevance_grade: grade,
       issue_reasons: [...row.querySelectorAll("[data-role=result-issue]:checked")].map(node => node.value),
       preferred_replacement_path: row.querySelector("[data-role=replacement]").value || null,
       relation_helpful: relationValue === "true" ? true : relationValue === "false" ? false : null,
+      ontology_context_grade: contextValue && contextValue !== "" ? Number(contextValue) : null,
+      relation_path_correct: relationCorrect === "true" ? true : relationCorrect === "false" ? false : null,
+      rule_application_correct: ruleCorrect === "true" ? true : ruleCorrect === "false" ? false : null,
     });
+  });
+  const lines = role => (card.querySelector(`[data-role=${role}]`)?.value || "").split("\n").map(value => value.trim()).filter(Boolean);
+  const expectedRelations = lines("expected-relations").map(line => {
+    const [subject, predicate, object] = line.split("|").map(value => value.trim());
+    return {subject, predicate, object};
   });
   const payload = {
     ...groups,
@@ -203,6 +263,11 @@ async function saveEvent(card, button) {
     expected_no_answer: card.querySelector("[data-role=no-answer]").checked,
     missing_answer_path: card.querySelector("[data-role=missing]").value || null,
     notes: card.querySelector("[data-role=notes]").value || null,
+    expected_relations: expectedRelations,
+    expected_graph_paths: lines("expected-graph-paths").map(line => line.split(">").map(value => value.trim()).filter(Boolean)),
+    forbidden_paths: lines("forbidden-paths"),
+    expected_rule_types: [...card.querySelectorAll("[data-role=ontology-rule]:checked")].map(node => node.value),
+    ontology_notes: card.querySelector("[data-role=ontology-notes]").value || null,
   };
   try {
     const response = await fetch(`/api/search-feedback/${card.dataset.searchId}`, {

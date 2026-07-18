@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "kind": "ontology-search-evaluation",
+  "split": "development-example",
+  "cases": [
+    {
+      "id": "example-typed-relation",
+      "query": "지식베이스가 사용하는 데이터베이스는 무엇인가?",
+      "query_type": "relation",
+      "expected_direct_paths": ["qa/example-service.md"],
+      "expected_context_paths": ["topics/example-postgresql.md"],
+      "forbidden_paths": [],
+      "expected_relations": [
+        {"subject": "knowledge-base", "predicate": "uses", "object": "postgresql"}
+      ],
+      "expected_rules": [],
+      "expected_no_answer": false
+    },
+    {
+      "id": "example-lifecycle-rule",
+      "query": "현재 로그인 세션 구현은 무엇인가?",
+      "query_type": "lifecycle",
+      "expected_direct_paths": ["qa/example-current-session.md"],
+      "expected_context_paths": [],
+      "forbidden_paths": ["qa/example-old-session.md"],
+      "expected_relations": [
+        {"subject": "current-session", "predicate": "supersedes", "object": "old-session"}
+      ],
+      "expected_rules": ["prefer-current-knowledge"],
+      "expected_no_answer": false
+    }
+  ]
+}

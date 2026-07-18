@@ -19,7 +19,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: indexing-worker
-              image: docker.io/library/mcp-wiki-server:async-indexing-20260717-2129
+              image: docker.io/library/mcp-wiki-server:ontology-feedback-20260718-1113
               imagePullPolicy: IfNotPresent
               command: ["python", "main.py", "retry-indexing", "--limit", "100"]
               env:

@@ -23,6 +23,13 @@ _RESULT_ISSUE_REASONS = {
     "unsafe", "insufficient", "unrelated",
 }
 _BEHAVIOR_ACTIONS = {"open", "copy", "cite", "follow_graph", "reformulate", "abandon"}
+_ONTOLOGY_PREDICATES = {
+    "uses", "depends_on", "is_a", "part_of", "supersedes", "contradicts",
+    "prohibits", "requires", "related_to",
+}
+_ONTOLOGY_RULE_TYPES = {
+    "prefer_current", "expose_conflict", "prohibit", "expand_relation", "none",
+}
 
 
 def redact_search_query(query: str) -> str:
@@ -135,6 +142,8 @@ class SearchFeedbackService:
                        f.relevant_paths, f.irrelevant_paths, f.expected_no_answer,
                        f.missing_answer_path, f.notes, f.labeled_at,
                        f.partially_relevant_paths, f.satisfaction, f.failure_reasons,
+                       f.expected_relations, f.expected_graph_paths, f.forbidden_paths,
+                       f.expected_rule_types, f.ontology_notes,
                        e.ranking_config_version, e.ontology_version, e.candidate_count,
                        COALESCE((
                            SELECT jsonb_agg(jsonb_build_object(
@@ -143,6 +152,9 @@ class SearchFeedbackService:
                                'issue_reasons', rf.issue_reasons,
                                'preferred_replacement_path', rf.preferred_replacement_path,
                                'relation_helpful', rf.relation_helpful,
+                               'ontology_context_grade', rf.ontology_context_grade,
+                               'relation_path_correct', rf.relation_path_correct,
+                               'rule_application_correct', rf.rule_application_correct,
                                'notes', rf.notes
                            ) ORDER BY rf.file_path)
                            FROM knowledge_search_result_feedback rf
@@ -231,14 +243,40 @@ class SearchFeedbackService:
         satisfaction: Optional[str] = None,
         failure_reasons: Optional[List[str]] = None,
         result_feedback: Optional[List[Dict[str, Any]]] = None,
+        expected_relations: Optional[List[Dict[str, str]]] = None,
+        expected_graph_paths: Optional[List[List[str]]] = None,
+        forbidden_paths: Optional[List[str]] = None,
+        expected_rule_types: Optional[List[str]] = None,
+        ontology_notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         partially_relevant_paths = partially_relevant_paths or []
         failure_reasons = failure_reasons or []
         result_feedback = result_feedback or []
+        expected_relations = expected_relations or []
+        expected_graph_paths = expected_graph_paths or []
+        forbidden_paths = forbidden_paths or []
+        expected_rule_types = expected_rule_types or []
         if satisfaction not in (None, "satisfied", "partial", "dissatisfied"):
             raise ValueError("올바르지 않은 전체 만족도입니다.")
         if not set(failure_reasons) <= _FAILURE_REASONS:
             raise ValueError("올바르지 않은 불만족 이유입니다.")
+        if len(expected_relations) > 20 or len(expected_graph_paths) > 20 or len(forbidden_paths) > 20:
+            raise ValueError("온톨로지 평가 항목은 종류별로 최대 20개까지 저장할 수 있습니다.")
+        if not set(expected_rule_types) <= _ONTOLOGY_RULE_TYPES:
+            raise ValueError("올바르지 않은 기대 규칙입니다.")
+        for relation in expected_relations:
+            if not isinstance(relation, dict):
+                raise ValueError("기대 관계는 주체, 관계, 대상 구조여야 합니다.")
+            if not all(str(relation.get(key, "")).strip() for key in ("subject", "predicate", "object")):
+                raise ValueError("기대 관계에는 주체, 관계, 대상이 모두 필요합니다.")
+            if relation["predicate"] not in _ONTOLOGY_PREDICATES:
+                raise ValueError("올바르지 않은 기대 관계 유형입니다.")
+        if any(
+            not isinstance(path, list) or len(path) < 2 or
+            any(not isinstance(node, str) or not node.strip() for node in path)
+            for path in expected_graph_paths
+        ):
+            raise ValueError("기대 그래프 경로는 두 개 이상의 경로 요소가 필요합니다.")
         feedback_paths = set()
         for item in result_feedback:
             path = item.get("file_path")
@@ -250,6 +288,12 @@ class SearchFeedbackService:
                 raise ValueError("문서 관련도는 0부터 3 사이여야 합니다.")
             if not reasons <= _RESULT_ISSUE_REASONS:
                 raise ValueError("올바르지 않은 문서 문제 이유입니다.")
+            context_grade = item.get("ontology_context_grade")
+            if context_grade is not None and (
+                not isinstance(context_grade, int) or isinstance(context_grade, bool) or
+                not 0 <= context_grade <= 3
+            ):
+                raise ValueError("온톨로지 맥락 관련도는 0부터 3 사이여야 합니다.")
             feedback_paths.add(path)
         if expected_no_answer and (relevant_paths or partially_relevant_paths):
             raise ValueError("정답 없음과 정답 문서는 동시에 선택할 수 없습니다.")
@@ -276,8 +320,13 @@ class SearchFeedbackService:
                 INSERT INTO knowledge_search_feedback (
                     search_id, owner_id, relevant_paths, irrelevant_paths,
                     expected_no_answer, missing_answer_path, notes, labeled_by, labeled_at,
-                    partially_relevant_paths, satisfaction, failure_reasons
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s)
+                    partially_relevant_paths, satisfaction, failure_reasons,
+                    expected_relations, expected_graph_paths, forbidden_paths,
+                    expected_rule_types, ontology_notes
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s,
+                    %s::jsonb, %s::jsonb, %s, %s, %s
+                )
                 ON CONFLICT (owner_id, search_id) DO UPDATE SET
                     relevant_paths = EXCLUDED.relevant_paths,
                     irrelevant_paths = EXCLUDED.irrelevant_paths,
@@ -287,6 +336,11 @@ class SearchFeedbackService:
                     partially_relevant_paths = EXCLUDED.partially_relevant_paths,
                     satisfaction = EXCLUDED.satisfaction,
                     failure_reasons = EXCLUDED.failure_reasons,
+                    expected_relations = EXCLUDED.expected_relations,
+                    expected_graph_paths = EXCLUDED.expected_graph_paths,
+                    forbidden_paths = EXCLUDED.forbidden_paths,
+                    expected_rule_types = EXCLUDED.expected_rule_types,
+                    ontology_notes = EXCLUDED.ontology_notes,
                     labeled_by = EXCLUDED.labeled_by,
                     labeled_at = CURRENT_TIMESTAMP
                 RETURNING labeled_at
@@ -294,6 +348,8 @@ class SearchFeedbackService:
                 search_id, owner_id, relevant_paths, irrelevant_paths,
                 expected_no_answer, missing_answer_path or None, notes or None, owner_id,
                 partially_relevant_paths, satisfaction, failure_reasons,
+                json.dumps(expected_relations), json.dumps(expected_graph_paths),
+                forbidden_paths, expected_rule_types, ontology_notes or None,
             ))
             labeled_at = cur.fetchone()[0]
             cur.execute(
@@ -305,11 +361,15 @@ class SearchFeedbackService:
                     INSERT INTO knowledge_search_result_feedback (
                         search_id, owner_id, file_path, relevance_grade, issue_reasons,
                         preferred_replacement_path, relation_helpful, notes
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        , ontology_context_grade, relation_path_correct,
+                        rule_application_correct
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     search_id, owner_id, item["file_path"], item["relevance_grade"],
                     item.get("issue_reasons") or [], item.get("preferred_replacement_path") or None,
                     item.get("relation_helpful"), item.get("notes") or None,
+                    item.get("ontology_context_grade"), item.get("relation_path_correct"),
+                    item.get("rule_application_correct"),
                 ))
         return {"search_id": search_id, "labeled_at": labeled_at.isoformat()}
 

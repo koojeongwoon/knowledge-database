@@ -508,6 +508,262 @@ def _create_learning_knowledge_candidates(cur) -> None:
     """)
 
 
+def _create_ontology_schema(cur) -> None:
+    """Create owner-scoped ontology storage without touching direct retrieval tables."""
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_ontology_concepts (
+            owner_id VARCHAR(50) NOT NULL,
+            concept_id VARCHAR(160) NOT NULL,
+            canonical_name VARCHAR(300) NOT NULL,
+            concept_kind VARCHAR(40) NOT NULL DEFAULT 'concept',
+            description TEXT,
+            status VARCHAR(20) NOT NULL DEFAULT 'approved',
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_id, concept_id),
+            CONSTRAINT ck_ontology_concept_status CHECK (
+                status IN ('draft', 'approved', 'deprecated')
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_ontology_concept_sources (
+            owner_id VARCHAR(50) NOT NULL,
+            concept_id VARCHAR(160) NOT NULL,
+            source_path VARCHAR(512) NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_id, concept_id, source_path),
+            FOREIGN KEY (owner_id, concept_id)
+                REFERENCES knowledge_ontology_concepts(owner_id, concept_id)
+                ON DELETE CASCADE
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_concept_source_path_idx
+        ON knowledge_ontology_concept_sources (owner_id, source_path);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_ontology_aliases (
+            owner_id VARCHAR(50) NOT NULL,
+            concept_id VARCHAR(160) NOT NULL,
+            alias VARCHAR(300) NOT NULL,
+            normalized_alias VARCHAR(300) NOT NULL,
+            language VARCHAR(20),
+            source_path VARCHAR(512) NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_id, concept_id, normalized_alias),
+            FOREIGN KEY (owner_id, concept_id)
+                REFERENCES knowledge_ontology_concepts(owner_id, concept_id)
+                ON DELETE CASCADE
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_alias_lookup_idx
+        ON knowledge_ontology_aliases (owner_id, normalized_alias);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_ontology_relations (
+            owner_id VARCHAR(50) NOT NULL,
+            subject_concept_id VARCHAR(160) NOT NULL,
+            predicate VARCHAR(40) NOT NULL,
+            object_concept_id VARCHAR(160) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'approved',
+            source_kind VARCHAR(20) NOT NULL DEFAULT 'explicit',
+            source_path VARCHAR(512) NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_id, subject_concept_id, predicate, object_concept_id, source_path),
+            FOREIGN KEY (owner_id, subject_concept_id)
+                REFERENCES knowledge_ontology_concepts(owner_id, concept_id),
+            FOREIGN KEY (owner_id, object_concept_id)
+                REFERENCES knowledge_ontology_concepts(owner_id, concept_id),
+            CONSTRAINT ck_ontology_relation_predicate CHECK (
+                predicate IN (
+                    'uses', 'depends_on', 'is_a', 'part_of', 'supersedes',
+                    'contradicts', 'prohibits', 'requires', 'related_to'
+                )
+            ),
+            CONSTRAINT ck_ontology_relation_status CHECK (
+                status IN ('draft', 'approved', 'rejected', 'deprecated')
+            ),
+            CONSTRAINT ck_ontology_relation_source_kind CHECK (
+                source_kind IN ('explicit', 'derived')
+            ),
+            CONSTRAINT ck_ontology_relation_confidence CHECK (
+                confidence >= 0 AND confidence <= 1
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_relation_subject_idx
+        ON knowledge_ontology_relations (owner_id, subject_concept_id, predicate);
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_relation_object_idx
+        ON knowledge_ontology_relations (owner_id, object_concept_id, predicate);
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_document_concepts (
+            owner_id VARCHAR(50) NOT NULL,
+            file_path VARCHAR(512) NOT NULL,
+            concept_id VARCHAR(160) NOT NULL,
+            source_kind VARCHAR(20) NOT NULL DEFAULT 'explicit',
+            source_path VARCHAR(512) NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_id, file_path, concept_id),
+            FOREIGN KEY (owner_id, concept_id)
+                REFERENCES knowledge_ontology_concepts(owner_id, concept_id)
+                ON DELETE CASCADE,
+            CONSTRAINT ck_document_concept_source_kind CHECK (
+                source_kind IN ('explicit', 'derived')
+            ),
+            CONSTRAINT ck_document_concept_confidence CHECK (
+                confidence >= 0 AND confidence <= 1
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_document_concepts_lookup_idx
+        ON knowledge_document_concepts (owner_id, concept_id, file_path);
+    """)
+
+
+def _create_ontology_shadow_events(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_ontology_shadow_events (
+            id BIGSERIAL PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            file_path VARCHAR(512) NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            persisted BOOLEAN NOT NULL DEFAULT FALSE,
+            concept_count INT NOT NULL DEFAULT 0,
+            relation_count INT NOT NULL DEFAULT 0,
+            document_concept_count INT NOT NULL DEFAULT 0,
+            duration_ms REAL NOT NULL DEFAULT 0,
+            error_type VARCHAR(160),
+            error_message TEXT,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_ontology_shadow_status CHECK (
+                status IN ('observed', 'persisted', 'error')
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_shadow_owner_created_idx
+        ON knowledge_ontology_shadow_events (owner_id, created_at DESC);
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_shadow_owner_file_idx
+        ON knowledge_ontology_shadow_events (owner_id, file_path, created_at DESC);
+    """)
+
+
+def _extend_ontology_relation_lifecycle(cur) -> None:
+    """Prepare relation provenance and review lifecycle before automatic extraction."""
+    cur.execute("""
+        ALTER TABLE knowledge_ontology_relations
+        ADD COLUMN IF NOT EXISTS relation_id BIGSERIAL,
+        ADD COLUMN IF NOT EXISTS scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+        ADD COLUMN IF NOT EXISTS valid_from TIMESTAMP WITH TIME ZONE,
+        ADD COLUMN IF NOT EXISTS valid_to TIMESTAMP WITH TIME ZONE,
+        ADD COLUMN IF NOT EXISTS reviewed_by VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP WITH TIME ZONE,
+        ADD COLUMN IF NOT EXISTS review_reason TEXT;
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS knowledge_ontology_relation_id_idx
+        ON knowledge_ontology_relations (relation_id);
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_ontology_relations
+        DROP CONSTRAINT IF EXISTS ck_ontology_relation_status;
+    """)
+    cur.execute("""
+        UPDATE knowledge_ontology_relations
+        SET status = CASE status
+            WHEN 'approved' THEN 'asserted'
+            WHEN 'draft' THEN 'pending'
+            WHEN 'deprecated' THEN 'revoked'
+            ELSE status
+        END;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_ontology_relations
+        ALTER COLUMN status SET DEFAULT 'asserted',
+        ADD CONSTRAINT ck_ontology_relation_status CHECK (
+            status IN ('inferred', 'pending', 'asserted', 'rejected', 'stale', 'revoked')
+        ),
+        ADD CONSTRAINT ck_ontology_relation_validity CHECK (
+            valid_from IS NULL OR valid_to IS NULL OR valid_from <= valid_to
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_ontology_relation_evidence (
+            evidence_id BIGSERIAL PRIMARY KEY,
+            relation_id BIGINT NOT NULL REFERENCES knowledge_ontology_relations(relation_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            source_path VARCHAR(512) NOT NULL,
+            source_revision VARCHAR(128),
+            evidence_text TEXT NOT NULL DEFAULT '',
+            evidence_location JSONB NOT NULL DEFAULT '{}'::jsonb,
+            evidence_hash CHAR(64) NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            extractor_type VARCHAR(20) NOT NULL DEFAULT 'human',
+            model_name VARCHAR(160),
+            model_version VARCHAR(160),
+            prompt_version VARCHAR(160),
+            ontology_schema_version VARCHAR(100) NOT NULL DEFAULT 'ontology-v1',
+            extracted_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_ontology_relation_evidence UNIQUE (
+                relation_id, source_path, evidence_hash, extractor_type
+            ),
+            CONSTRAINT ck_ontology_evidence_confidence CHECK (
+                confidence >= 0 AND confidence <= 1
+            ),
+            CONSTRAINT ck_ontology_evidence_extractor CHECK (
+                extractor_type IN ('human', 'llm', 'rule')
+            )
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_ontology_evidence_owner_source_idx
+        ON knowledge_ontology_relation_evidence (owner_id, source_path);
+    """)
+
+
+def _extend_ontology_search_feedback(cur) -> None:
+    """Collect explicit ontology labels before ontology affects retrieval."""
+    cur.execute("""
+        ALTER TABLE knowledge_search_feedback
+        ADD COLUMN IF NOT EXISTS expected_relations JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS expected_graph_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS forbidden_paths TEXT[] NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS expected_rule_types TEXT[] NOT NULL DEFAULT '{}',
+        ADD COLUMN IF NOT EXISTS ontology_notes TEXT;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_search_result_feedback
+        ADD COLUMN IF NOT EXISTS ontology_context_grade SMALLINT,
+        ADD COLUMN IF NOT EXISTS relation_path_correct BOOLEAN,
+        ADD COLUMN IF NOT EXISTS rule_application_correct BOOLEAN;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_search_result_feedback
+        DROP CONSTRAINT IF EXISTS ck_search_result_ontology_context_grade;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_search_result_feedback
+        ADD CONSTRAINT ck_search_result_ontology_context_grade CHECK (
+            ontology_context_grade IS NULL OR ontology_context_grade BETWEEN 0 AND 3
+        );
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -522,6 +778,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(11, "create_learning_sessions", _create_learning_sessions),
     Migration(12, "create_learning_reviews", _create_learning_reviews),
     Migration(13, "create_learning_knowledge_candidates", _create_learning_knowledge_candidates),
+    Migration(14, "create_ontology_schema", _create_ontology_schema),
+    Migration(15, "create_ontology_shadow_events", _create_ontology_shadow_events),
+    Migration(16, "extend_ontology_relation_lifecycle", _extend_ontology_relation_lifecycle),
+    Migration(17, "extend_ontology_search_feedback", _extend_ontology_search_feedback),
 )
 
 

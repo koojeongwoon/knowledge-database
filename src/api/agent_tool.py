@@ -12,6 +12,7 @@ from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM
 from src.core.config import current_user_config
 from src.core.database.factory import DatabaseManager
 from src.core.logging.audit import log_audit  # 감사 로거 유틸 임포트
+from src.indexing.composition import create_wiki_indexer
 from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
 from src.retrieval.application.service import WikiSearcher
 from src.retrieval.domain.formatter import format_retrieved_documents
@@ -437,6 +438,11 @@ def submit_wiki_search_feedback(
     satisfaction: Optional[str] = None,
     failure_reasons: List[str] = None,
     result_feedback: List[Dict[str, Any]] = None,
+    expected_relations: List[Dict[str, str]] = None,
+    expected_graph_paths: List[List[str]] = None,
+    forbidden_paths: List[str] = None,
+    expected_rule_types: List[str] = None,
+    ontology_notes: Optional[str] = None,
 ) -> Dict[str, Any]:
     config = current_user_config.get() or {}
     owner_id = config.get("user_id", "SYSTEM")
@@ -454,6 +460,11 @@ def submit_wiki_search_feedback(
             satisfaction=satisfaction,
             failure_reasons=failure_reasons or [],
             result_feedback=result_feedback or [],
+            expected_relations=expected_relations or [],
+            expected_graph_paths=expected_graph_paths or [],
+            forbidden_paths=forbidden_paths or [],
+            expected_rule_types=expected_rule_types or [],
+            ontology_notes=ontology_notes,
         )
     except KeyError as exc:
         raise InvalidArgumentException(str(exc)) from exc
@@ -563,8 +574,6 @@ def run_wiki_indexing(file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     로컬 마크다운 파일들의 변경 사항을 감지하여 데이터베이스에 실시간으로 증분 인덱싱(임베딩)합니다.
     """
-    from src.indexing.application.service import WikiIndexer
-
     user_config = current_user_config.get() or {}
     user_id = user_config.get("api_key", "SYSTEM")
 
@@ -583,7 +592,7 @@ def run_wiki_indexing(file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
         else:
             embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
             
-        indexer = WikiIndexer(root_dir="", db_manager=db_manager, embedding_service=embedding_service)
+        indexer = create_wiki_indexer(db_manager, embedding_service)
         stats = indexer.run_indexing(file_paths=file_paths)
         
         # 인덱싱 완료 감사 로그 성공 기록
