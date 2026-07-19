@@ -229,6 +229,54 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(self.client.get("/api/search-feedback/events").status_code, 401)
 
+    @patch("src.settings.web.invalidate_storage_cache")
+    @patch("src.settings.web.UserSettingsService")
+    @patch("src.settings.web._authenticated_user")
+    def test_settings_save_is_owner_scoped_and_invalidates_owner_cache(
+        self, authenticated_user, service_class, invalidate_cache,
+    ):
+        authenticated_user.return_value = "USER_3"
+        service = service_class.return_value
+        service.get_public.return_value = {
+            "s3_access_key_configured": True,
+            "s3_secret_key_configured": True,
+        }
+        service.save.return_value = {"storage_type": "s3"}
+
+        response = self.client.put("/api/settings", json={
+            "storage_type": "s3",
+            "s3_endpoint_url": "https://storage.example",
+            "s3_bucket_name": "owner-bucket",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        service.save.assert_called_once()
+        self.assertEqual(service.save.call_args.args[0], "USER_3")
+        invalidate_cache.assert_called_once_with("USER_3")
+        service.db_manager.close.assert_called_once()
+
+    @patch("src.settings.web.UserSettingsService")
+    @patch("src.settings.web._authenticated_user")
+    def test_settings_save_requires_initial_storage_credentials(
+        self, authenticated_user, service_class,
+    ):
+        authenticated_user.return_value = "USER_4"
+        service = service_class.return_value
+        service.get_public.return_value = {
+            "s3_access_key_configured": False,
+            "s3_secret_key_configured": False,
+        }
+
+        response = self.client.put("/api/settings", json={
+            "storage_type": "r2",
+            "s3_endpoint_url": "https://r2.example",
+            "s3_bucket_name": "owner-bucket",
+        })
+
+        self.assertEqual(response.status_code, 422)
+        service.save.assert_not_called()
+        service.db_manager.close.assert_called_once()
+
     @patch("src.settings.web.SearchFeedbackService")
     @patch("src.settings.web._authenticated_user")
     def test_recent_search_feedback_is_owner_scoped(self, authenticated_user, service_class):

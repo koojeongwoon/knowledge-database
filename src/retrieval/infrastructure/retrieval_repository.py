@@ -48,6 +48,8 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
             FROM knowledge_documents d
             LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
             WHERE to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')) @@ to_tsquery('simple', %s)
+                  AND d.file_path NOT LIKE 'baselines/%%'
+                  AND d.file_path NOT LIKE 'baseline-drafts/%%'
                   AND ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
             ORDER BY rank DESC
             LIMIT %s;
@@ -76,6 +78,8 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
             FROM knowledge_documents d
             LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
             WHERE ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
+              AND d.file_path NOT LIKE 'baselines/%%'
+              AND d.file_path NOT LIKE 'baseline-drafts/%%'
             ORDER BY d.embedding <=> %s ASC
             LIMIT %s;
             """
@@ -99,6 +103,8 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
             SELECT target_topic, MAX(weight) as weight, ARRAY_AGG(DISTINCT source_path) AS source_paths
             FROM knowledge_edges 
             WHERE source_path = ANY(%s)
+              AND source_path NOT LIKE 'baselines/%%'
+              AND source_path NOT LIKE 'baseline-drafts/%%'
               AND ((visibility = 'public') OR (visibility = 'private' AND owner_id = %s))
             GROUP BY target_topic
             ORDER BY weight DESC
@@ -119,6 +125,8 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
             SELECT file_path, doc_type, title, description, tags, content, parent_content
             FROM knowledge_documents
             WHERE chunk_index = 0
+              AND file_path NOT LIKE 'baselines/%%'
+              AND file_path NOT LIKE 'baseline-drafts/%%'
               AND ((visibility = 'public') OR (visibility = 'private' AND owner_id = %s))
               AND (
                 LOWER(title) = ANY(%s) OR

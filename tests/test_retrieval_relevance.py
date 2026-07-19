@@ -1,9 +1,10 @@
 import unittest
-from unittest.mock import patch
+from dataclasses import replace
 
 from src.retrieval.application.service import WikiSearcher
 from src.retrieval.domain.formatter import format_retrieved_documents
 from src.retrieval.domain.model import GraphExpansionPolicy, RankFusion, RetrievalConfidence
+from src.retrieval.domain.policy import RetrievalPolicy
 
 
 def _doc(path, *, similarity=0.0, rank=0.0, citation_count=0):
@@ -34,6 +35,8 @@ class _Repository:
         self.keyword_results = keyword_results
         self.connected_results = connected_results or []
         self.graph_calls = []
+        self.citation_calls = []
+        self.graph_error = None
 
     def similarity_search(self, _embedding, limit):
         return self.vector_results[:limit]
@@ -42,19 +45,29 @@ class _Repository:
         return self.keyword_results[:limit]
 
     def increment_citation_count(self, _paths):
-        return None
+        self.citation_calls.append(tuple(_paths))
 
     def get_connected_documents(self, paths, limit):
         self.graph_calls.append((paths, limit))
+        if self.graph_error:
+            raise self.graph_error
         return self.connected_results[:limit]
 
 
-def _searcher(repository):
-    searcher = object.__new__(WikiSearcher)
-    searcher.repository = repository
-    searcher.embedding_service = _Embedding()
-    searcher.reranker = None
-    return searcher
+class _Observer:
+    def __init__(self):
+        self.errors = []
+
+    def graph_expansion_failed(self, error):
+        self.errors.append(error)
+
+
+def _searcher(repository, policy=None):
+    return WikiSearcher(
+        repository=repository,
+        embedding_service=_Embedding(),
+        policy=policy or RetrievalPolicy(),
+    )
 
 
 class RankFusionSignalTests(unittest.TestCase):
@@ -173,8 +186,10 @@ class RetrievalRelevanceTests(unittest.TestCase):
             "graph_sources": ["qa/direct.md"],
             "graph_target": "graph",
         }
-        with patch("src.retrieval.application.service.GRAPH_CONTEXT_ENABLED", True):
-            result = _searcher(_Repository([direct], [], [graph])).search("query", limit=2)
+        result = _searcher(
+            _Repository([direct], [], [graph]),
+            replace(RetrievalPolicy(), graph_context_enabled=True),
+        ).search("query", limit=2)
 
         self.assertEqual(len(result), 1)
         context = result[0]["graph_context"][0]
@@ -188,17 +203,20 @@ class RetrievalRelevanceTests(unittest.TestCase):
     def test_weak_direct_result_does_not_query_graph(self):
         repo = _Repository([_doc("qa/weak.md", similarity=0.4)], [], [_doc("qa/graph.md")])
 
-        with patch("src.retrieval.application.service.GRAPH_CONTEXT_ENABLED", True):
-            result = _searcher(repo).search("query", limit=2)
+        result = _searcher(
+            repo, replace(RetrievalPolicy(), graph_context_enabled=True),
+        ).search("query", limit=2)
 
         self.assertEqual([doc["file_path"] for doc in result], ["qa/weak.md"])
         self.assertEqual(repo.graph_calls, [])
 
     def test_never_returns_more_than_requested_limit(self):
         direct = [_doc(f"qa/{index}.md", similarity=0.7) for index in range(3)]
-        result = _searcher(_Repository(direct, [])).search("query", limit=2)
+        repository = _Repository(direct, [])
+        result = _searcher(repository).search("query", limit=2)
 
         self.assertEqual(len(result), 2)
+        self.assertEqual(repository.citation_calls, [("qa/0.md", "qa/1.md")])
 
     def test_returns_each_file_only_once_across_multiple_chunks(self):
         first = _doc("qa/same.md", similarity=0.7)
@@ -206,6 +224,23 @@ class RetrievalRelevanceTests(unittest.TestCase):
         result = _searcher(_Repository([first, second], [])).search("query", limit=5)
 
         self.assertEqual([doc["file_path"] for doc in result], ["qa/same.md"])
+
+    def test_graph_failure_is_observed_without_failing_direct_results(self):
+        repository = _Repository([_doc("qa/direct.md", similarity=0.7)], [])
+        repository.graph_error = RuntimeError("graph unavailable")
+        observer = _Observer()
+        searcher = WikiSearcher(
+            repository=repository,
+            embedding_service=_Embedding(),
+            policy=replace(RetrievalPolicy(), graph_context_enabled=True),
+            observer=observer,
+        )
+
+        result = searcher.search("query", limit=2)
+
+        self.assertEqual([document["file_path"] for document in result], ["qa/direct.md"])
+        self.assertEqual(len(observer.errors), 1)
+        self.assertEqual(str(observer.errors[0]), "graph unavailable")
 
 if __name__ == "__main__":
     unittest.main()

@@ -190,6 +190,9 @@ MCP 클라이언트는 인증 API 키를 Bearer token으로 전달합니다.
 | 도구 | 용도 |
 | --- | --- |
 | `search_wiki_knowledge` | 하이브리드 검색. 응답에 `Search Event ID` 포함 |
+| `prepare_knowledge_baseline` | 선택한 `qa/`·`topics/` 문서로 기준본 초안 준비. 확정하지 않음 |
+| `confirm_knowledge_baseline` | 사용자가 명시적으로 승인한 초안을 불변 버전으로 확정 |
+| `search_knowledge_baseline` | 지정한 확정본만 검색. 일반 지식으로 자동 fallback하지 않음 |
 | `submit_search_feedback` | 검색 결과의 relevant/irrelevant/no-answer/missing-answer 라벨 저장 |
 | `commit_new_knowledge` | 지식 기록 후 변경 파일의 비동기 인덱싱 등록 |
 | `run_database_indexing` | 외부 수정 파일을 즉시 반영하는 지정 증분 인덱싱 |
@@ -249,7 +252,13 @@ Blind 파일과 결과는 Git ignore 대상입니다. 최근 Blind-v2 결과는 
 - `src/settings/web.py`: 로그인 세션, 설정, API key, 검색 피드백 웹 API
 - `src/indexing/application/service.py`: 변경 파일 중심 증분 인덱싱
 - `src/indexing/infrastructure/job_repository.py`: DB 재시도 큐
-- `src/retrieval/application/service.py`: fusion, confidence, graph 보조 검색
+- `src/wiki/domain/commit.py`: 지식 저장 command, plan, result와 결정적 경로 정책
+- `src/wiki/application/integration.py`: resource, journal, topic executor와 save-plus-enqueue 조정
+- `src/wiki/composition.py`: 사용자 storage, topic repository, durable queue 조립
+- `src/retrieval/application/service.py`: port와 불변 정책을 사용하는 검색 orchestration
+- `src/retrieval/domain/policy.py`: 후보 수, 임계치, confidence, graph 검색 정책
+- `src/retrieval/domain/projection.py`: direct 결과와 graph context의 순수 projection
+- `src/retrieval/composition.py`: repository, reranker, observer의 실제 구현 조립
 - `src/retrieval/feedback.py`: 검색 이벤트와 human label 저장
 - `src/retrieval/evaluation.py`: 개발·blind 품질 평가
 - `src/api/mcp_server.py`: MCP 도구와 웹/MCP 라우팅

@@ -3,29 +3,30 @@ import unittest
 from unittest.mock import patch
 
 from src.api.agent_tool import commit_wiki_knowledge, retry_wiki_indexing
+from src.api.exceptions import DatabaseException
 
 
 class CommitAutoIndexingTests(unittest.TestCase):
     @patch("src.api.agent_tool.log_audit")
     @patch("src.api.agent_tool.run_wiki_indexing")
-    @patch("src.api.agent_tool.WikiIntegrationManager")
-    @patch("src.api.agent_tool.DatabaseManager")
-    @patch("src.indexing.infrastructure.job_repository.IndexingJobRepository")
+    @patch("src.api.agent_tool.create_knowledge_commit_runtime")
     def test_commit_queues_indexing_without_running_it_inline(
         self,
-        job_repository_class,
-        _database_manager,
-        manager_class,
+        runtime_factory,
         run_indexing,
         _log_audit,
     ):
         written_path = "qa/2026-07-15/example/example.md"
-        manager_class.return_value.commit_knowledge.return_value = {
+        runtime_factory.return_value.coordinator.commit.return_value = {
             "qa_file_path": written_path,
             "topic_file_path": None,
             "all_resources": [],
             "written_paths": [written_path],
             "details": "committed",
+            "indexing": {
+                "status": "queued", "indexed_files": [], "retry_targets": [],
+                "queued_files": [written_path],
+            },
         }
         response = json.loads(commit_wiki_knowledge(
             title="example",
@@ -38,33 +39,22 @@ class CommitAutoIndexingTests(unittest.TestCase):
         self.assertEqual(response["data"]["qa_file_path"], written_path)
         self.assertEqual(response["data"]["indexing"]["status"], "queued")
         self.assertEqual(response["data"]["indexing"]["queued_files"], [written_path])
-        job_repository = job_repository_class.return_value
-        job_repository.enqueue.assert_called_once_with([written_path])
-        job_repository.start.assert_not_called()
-        job_repository.complete.assert_not_called()
-        job_repository.fail.assert_not_called()
+        runtime_factory.return_value.coordinator.commit.assert_called_once()
+        runtime_factory.return_value.close.assert_called_once_with()
         run_indexing.assert_not_called()
 
     @patch("src.api.agent_tool.log_audit")
-    @patch("src.api.agent_tool.WikiIntegrationManager")
-    @patch("src.api.agent_tool.DatabaseManager")
-    @patch("src.indexing.infrastructure.job_repository.IndexingJobRepository")
+    @patch("src.api.agent_tool.create_knowledge_commit_runtime")
     def test_queue_failure_reports_that_the_file_was_already_saved(
         self,
-        job_repository_class,
-        _database_manager,
-        manager_class,
+        runtime_factory,
         _log_audit,
     ):
         written_path = "qa/2026-07-15/example/example.md"
-        manager_class.return_value.commit_knowledge.return_value = {
-            "qa_file_path": written_path,
-            "topic_file_path": None,
-            "all_resources": [],
-            "written_paths": [written_path],
-            "details": "committed",
-        }
-        job_repository_class.return_value.enqueue.side_effect = RuntimeError("queue unavailable")
+        runtime_factory.return_value.coordinator.commit.side_effect = DatabaseException(
+            "지식 파일은 저장되었지만 인덱싱 작업 등록에 실패했습니다. "
+            f"저장된 파일: {written_path}. 원인: queue unavailable"
+        )
 
         response = json.loads(commit_wiki_knowledge(
             title="example",
@@ -77,6 +67,7 @@ class CommitAutoIndexingTests(unittest.TestCase):
         self.assertEqual(response["code"], "DATABASE_TRANSACTION_FAILED")
         self.assertIn("지식 파일은 저장되었지만", response["message"])
         self.assertIn(written_path, response["message"])
+        runtime_factory.return_value.close.assert_called_once_with()
 
     @patch("src.api.agent_tool.run_wiki_indexing")
     @patch("src.settings.service.UserSettingsService")

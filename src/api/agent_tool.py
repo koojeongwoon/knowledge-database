@@ -1,5 +1,4 @@
 import json
-from collections import defaultdict
 from typing import List, Dict, Any, Optional
 
 from src.api.decorators import tool_wrapper, with_fresh_user_settings
@@ -8,21 +7,28 @@ from src.api.exceptions import (
     InvalidArgumentException,
     DatabaseException,
 )
+from src.api.handlers.learning import LearningCandidateCommitHandler, LearningSessionApiHandler
+from src.api.handlers.knowledge import KnowledgeCommitApiHandler
+from src.api.handlers.indexing import IndexingRetryApiHandler, IndexingRunApiHandler
+from src.api.handlers.retrieval import RetrievalApiHandler
+from src.api.handlers.support import BaselineApiHandler, InboxApiHandler, SearchFeedbackApiHandler
 from src.core.config import EMBEDDING_PROVIDER, EMBEDDING_DIM
 from src.core.config import current_user_config
 from src.core.database.factory import DatabaseManager
 from src.core.logging.audit import log_audit  # 감사 로거 유틸 임포트
 from src.indexing.composition import create_wiki_indexer
 from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
-from src.retrieval.application.service import WikiSearcher
+from src.retrieval.composition import create_wiki_searcher
 from src.retrieval.domain.formatter import format_retrieved_documents
 from src.retrieval.feedback import SearchFeedbackService
-from src.wiki.application.integration import WikiIntegrationManager
+from src.wiki.composition import create_knowledge_commit_runtime
 from src.settings.inbox import InboxService
 from src.learning.application.service import LearningPreparationService
 from src.learning.application.session_service import LearningSessionService
+from src.learning.composition import create_learning_session_service
 from src.learning.domain.feedback import LearningFeedbackPlanner
-from src.learning.infrastructure.repository import LearningSessionRepository
+from src.baselines.search import BaselineSearcher
+from src.baselines.composition import create_baseline_service
 
 
 @tool_wrapper
@@ -39,54 +45,70 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
     user_id = user_config.get("api_key", "SYSTEM")
     owner_id = user_config.get("user_id", "SYSTEM")
 
-    try:
-        db_manager = DatabaseManager()
-        db_manager.connect()
-    except Exception as e:
-        log_audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id, payload={"query": query, "error": f"DB 연결 실패: {e}"})
-        raise DatabaseException(f"데이터베이스 연결에 실패했습니다: {e}") from e
-        
-    try:
-        if EMBEDDING_PROVIDER == "openai":
-            embedding_service = OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
-        elif EMBEDDING_PROVIDER == "bge-m3":
-            embedding_service = BGEM3EmbeddingService()
-        else:
-            embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
-            
-        searcher = WikiSearcher(db_manager=db_manager, embedding_service=embedding_service)
-        results = searcher.search(query, limit=limit)
-        
-        try:
-            search_id = SearchFeedbackService(db_manager).record_event(owner_id, query, results)
-        except Exception as event_error:
-            search_id = None
-            log_audit("SEARCH_EVENT_RECORD", "FAILED", user_id=owner_id, payload={"error": str(event_error)})
+    return RetrievalApiHandler(
+        database_factory=DatabaseManager,
+        embedding_factory=_embedding_service,
+        searcher_factory=create_wiki_searcher,
+        feedback_factory=SearchFeedbackService,
+        formatter=format_retrieved_documents,
+        audit=log_audit,
+    ).search(query, limit, user_id, owner_id)
 
-        if not results:
-            log_audit("KNOWLEDGE_RETRIEVAL", "SUCCESS", user_id=user_id, payload={"query": query, "results_found": 0})
-            suffix = f"\nSearch Event ID: {search_id}" if search_id else ""
-            return "지식베이스에서 관련된 문서를 찾지 못했습니다." + suffix
-            
-        file_paths = [doc["file_path"] for doc in results]
-        formatted_result = format_retrieved_documents(results)
-            
-        # 검색 감사 로그 성공 기록
-        log_audit(
-            action="KNOWLEDGE_RETRIEVAL",
-            status="SUCCESS",
-            user_id=user_id,
-            payload={"query": query, "limit": limit, "citations": file_paths}
-        )
-        return (f"Search Event ID: {search_id}\n\n" if search_id else "") + formatted_result
-    except DatabaseException as de:
-        log_audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id, payload={"query": query, "error": str(de)})
-        raise
-    except Exception as e:
-        log_audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id, payload={"query": query, "error": str(e)})
-        raise WikiBaseException(f"지식베이스 탐색 수행 중 에러 발생: {e}") from e
-    finally:
-        db_manager.close()
+
+def _embedding_service():
+    if EMBEDDING_PROVIDER == "openai":
+        return OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
+    if EMBEDDING_PROVIDER == "bge-m3":
+        return BGEM3EmbeddingService()
+    return FakeEmbeddingService(dimension=EMBEDDING_DIM)
+
+
+def _baseline_context():
+    config = current_user_config.get() or {}
+    owner_id = config.get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException("기준본은 인증된 사용자만 사용할 수 있습니다.")
+    db_manager = DatabaseManager()
+    return owner_id, db_manager, create_baseline_service(owner_id, db_manager)
+
+
+def _baseline_handler() -> BaselineApiHandler:
+    return BaselineApiHandler(_baseline_context, BaselineSearcher, _embedding_service,
+                              format_retrieved_documents, log_audit)
+
+
+def _authenticated_owner(message: str) -> str:
+    owner_id = (current_user_config.get() or {}).get("user_id", "SYSTEM")
+    if not owner_id or owner_id == "SYSTEM":
+        raise InvalidArgumentException(message)
+    return owner_id
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def prepare_wiki_knowledge_baseline(
+    name: str, version: str, purpose: str, source_paths: List[str],
+    base_release_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    return _baseline_handler().prepare(name=name, version=version, purpose=purpose,
+                                       source_paths=source_paths, base_release_id=base_release_id)
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def confirm_wiki_knowledge_baseline(draft_id: str) -> Dict[str, Any]:
+    return _baseline_handler().confirm(draft_id)
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def search_wiki_knowledge_baseline(query: str, release_id: str, limit: int = 5) -> str:
+    if not query.strip():
+        raise InvalidArgumentException("검색 쿼리(query)는 비어 있을 수 없습니다.")
+    if limit < 1 or limit > 20:
+        raise InvalidArgumentException("limit은 1 이상 20 이하여야 합니다.")
+    owner_id = _authenticated_owner("기준본은 인증된 사용자만 사용할 수 있습니다.")
+    return _baseline_handler().search(owner_id, DatabaseManager(), query, release_id, limit)
 
 
 @tool_wrapper
@@ -102,12 +124,8 @@ def create_wiki_inbox_markdown(
     warnings: Optional[List[str]] = None,
     note: Optional[str] = None,
 ) -> Dict[str, Any]:
-    config = current_user_config.get() or {}
-    owner_id = config.get("user_id", "SYSTEM")
-    if not owner_id or owner_id == "SYSTEM":
-        raise InvalidArgumentException("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
-    try:
-        item = InboxService(owner_id).add_markdown(
+    owner_id = _authenticated_owner("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
+    return InboxApiHandler(InboxService, log_audit).create(owner_id,
             title=title,
             content=content,
             source_kind=source_kind,
@@ -118,10 +136,6 @@ def create_wiki_inbox_markdown(
             warnings=warnings,
             note=note,
         )
-        log_audit("INBOX_MARKDOWN_CREATE", "SUCCESS", user_id=owner_id, payload={"item_id": item["id"]})
-        return item
-    except ValueError as exc:
-        raise InvalidArgumentException(str(exc)) from exc
 
 
 @tool_wrapper
@@ -129,25 +143,15 @@ def create_wiki_inbox_markdown(
 def list_wiki_inbox_items(limit: int = 50) -> Dict[str, Any]:
     if limit < 1 or limit > 100:
         raise InvalidArgumentException("limit은 1 이상 100 이하여야 합니다.")
-    config = current_user_config.get() or {}
-    owner_id = config.get("user_id", "SYSTEM")
-    if not owner_id or owner_id == "SYSTEM":
-        raise InvalidArgumentException("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
-    items = InboxService(owner_id).list_items()[:limit]
-    return {"items": items, "count": len(items)}
+    owner_id = _authenticated_owner("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
+    return InboxApiHandler(InboxService, log_audit).list(owner_id, limit)
 
 
 @tool_wrapper
 @with_fresh_user_settings
 def read_wiki_inbox_item(item_id: str) -> Dict[str, Any]:
-    config = current_user_config.get() or {}
-    owner_id = config.get("user_id", "SYSTEM")
-    if not owner_id or owner_id == "SYSTEM":
-        raise InvalidArgumentException("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
-    try:
-        return InboxService(owner_id).read_for_learning(item_id)
-    except (ValueError, FileNotFoundError) as exc:
-        raise InvalidArgumentException("Inbox 항목을 찾을 수 없거나 읽을 수 없습니다.") from exc
+    owner_id = _authenticated_owner("Inbox를 사용하려면 인증된 사용자가 필요합니다.")
+    return InboxApiHandler(InboxService, log_audit).read(owner_id, item_id)
 
 
 @tool_wrapper
@@ -214,7 +218,11 @@ def plan_wiki_learning_feedback(
 
 
 def _learning_session_service() -> LearningSessionService:
-    return LearningSessionService(LearningSessionRepository(DatabaseManager()))
+    return create_learning_session_service()
+
+
+def _learning_api_handler() -> LearningSessionApiHandler:
+    return LearningSessionApiHandler(service_factory=_learning_session_service)
 
 
 def _authenticated_learning_owner() -> str:
@@ -237,16 +245,10 @@ def start_wiki_learning_session(
     sources: Optional[List[Dict[str, Any]]] = None,
     client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.start(
-            _authenticated_learning_owner(), topic, requested_scope, effective_scope,
-            goal, level, duration_minutes, first_question, sources, client_request_id,
-        )
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().start(
+        _authenticated_learning_owner(), topic, requested_scope, effective_scope,
+        goal, level, duration_minutes, first_question, sources, client_request_id,
+    )
 
 
 @tool_wrapper
@@ -266,54 +268,29 @@ def record_wiki_learning_attempt(
     next_evidence_refs: Optional[List[str]] = None,
     client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.record_attempt(
-            _authenticated_learning_owner(), session_id, question_id, answer,
-            assessment, confidence, feedback_plan, missing_concepts, misconceptions,
-            evidence_refs, next_question, next_question_type, next_evidence_refs,
-            client_request_id,
-        )
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().record_attempt(
+        _authenticated_learning_owner(), session_id, question_id, answer,
+        assessment, confidence, feedback_plan, missing_concepts, misconceptions,
+        evidence_refs, next_question, next_question_type, next_evidence_refs, client_request_id,
+    )
 
 
 @tool_wrapper
 @with_fresh_user_settings
 def resume_wiki_learning_session(session_id: Optional[str] = None) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.resume(_authenticated_learning_owner(), session_id)
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().resume(_authenticated_learning_owner(), session_id)
 
 
 @tool_wrapper
 @with_fresh_user_settings
 def complete_wiki_learning_session(session_id: str, summary: Optional[str] = None) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.complete(_authenticated_learning_owner(), session_id, summary)
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().complete(_authenticated_learning_owner(), session_id, summary)
 
 
 @tool_wrapper
 @with_fresh_user_settings
 def list_wiki_due_learning_reviews(limit: int = 20) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.list_due_reviews(_authenticated_learning_owner(), limit)
-    except ValueError as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().list_due_reviews(_authenticated_learning_owner(), limit)
 
 
 @tool_wrapper
@@ -326,28 +303,16 @@ def record_wiki_learning_review(
     feedback_plan: Dict[str, Any],
     client_request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.record_review(
-            _authenticated_learning_owner(), review_id, answer, assessment,
-            confidence, feedback_plan, client_request_id,
-        )
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().record_review(
+        _authenticated_learning_owner(), review_id, answer, assessment,
+        confidence, feedback_plan, client_request_id,
+    )
 
 
 @tool_wrapper
 @with_fresh_user_settings
 def prepare_wiki_learning_knowledge_candidates(session_id: str) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.prepare_knowledge_candidates(_authenticated_learning_owner(), session_id)
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().prepare_candidates(_authenticated_learning_owner(), session_id)
 
 
 @tool_wrapper
@@ -355,15 +320,9 @@ def prepare_wiki_learning_knowledge_candidates(session_id: str) -> Dict[str, Any
 def stage_wiki_learning_knowledge_candidates(
     session_id: str, candidates: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.stage_knowledge_candidates(
-            _authenticated_learning_owner(), session_id, candidates,
-        )
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().stage_candidates(
+        _authenticated_learning_owner(), session_id, candidates,
+    )
 
 
 @tool_wrapper
@@ -371,58 +330,18 @@ def stage_wiki_learning_knowledge_candidates(
 def review_wiki_learning_knowledge_candidate(
     candidate_id: str, approved: bool, note: Optional[str] = None,
 ) -> Dict[str, Any]:
-    service = _learning_session_service()
-    try:
-        return service.review_knowledge_candidate(
-            _authenticated_learning_owner(), candidate_id, approved, note,
-        )
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.repository.db_manager.close()
+    return _learning_api_handler().review_candidate(
+        _authenticated_learning_owner(), candidate_id, approved, note,
+    )
 
 
 @tool_wrapper
 @with_fresh_user_settings
 def commit_wiki_learning_knowledge_candidate(candidate_id: str) -> Dict[str, Any]:
-    owner_id = _authenticated_learning_owner()
-    service = _learning_session_service()
-    claimed = False
-    write_succeeded = False
-    try:
-        normalized_id = service._uuid(candidate_id, "candidate_id")
-        candidate = service.repository.claim_approved_knowledge_candidate(owner_id, normalized_id)
-        if candidate["status"] == "committed":
-            return {
-                "candidate_id": normalized_id, "status": "committed",
-                "qa_file_path": candidate.get("qa_file_path"),
-                "topic_file_path": candidate.get("topic_file_path"),
-                "idempotent_replay": True,
-            }
-        claimed = True
-        response = json.loads(commit_wiki_knowledge(
-            title=candidate["title"],
-            description=candidate["description"],
-            tags=candidate["tags"],
-            content=candidate["content"],
-            topic_name=candidate.get("topic_name"),
-            topic_update_text=candidate.get("topic_update_text"),
-            visibility="private",
-        ))
-        if not response.get("success"):
-            raise WikiBaseException(response.get("message") or "승인된 후보의 Knowledge 저장에 실패했습니다.")
-        write_succeeded = True
-        data = response.get("data") or {}
-        receipt = service.repository.mark_knowledge_candidate_committed(
-            owner_id, normalized_id, data["qa_file_path"], data.get("topic_file_path"),
-        )
-        return {"candidate": receipt, "knowledge_commit": data}
-    except (ValueError, KeyError) as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        if claimed and not write_succeeded:
-            service.repository.release_knowledge_candidate_claim(owner_id, candidate_id)
-        service.repository.db_manager.close()
+    return LearningCandidateCommitHandler(
+        service_factory=_learning_session_service,
+        commit_knowledge=commit_wiki_knowledge,
+    ).commit(_authenticated_learning_owner(), candidate_id)
 
 
 @tool_wrapper
@@ -446,9 +365,7 @@ def submit_wiki_search_feedback(
 ) -> Dict[str, Any]:
     config = current_user_config.get() or {}
     owner_id = config.get("user_id", "SYSTEM")
-    service = SearchFeedbackService()
-    try:
-        return service.submit(
+    return SearchFeedbackApiHandler(SearchFeedbackService).submit(
             owner_id=owner_id,
             search_id=search_id,
             relevant_paths=relevant_paths or [],
@@ -466,12 +383,6 @@ def submit_wiki_search_feedback(
             expected_rule_types=expected_rule_types or [],
             ontology_notes=ontology_notes,
         )
-    except KeyError as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    except ValueError as exc:
-        raise InvalidArgumentException(str(exc)) from exc
-    finally:
-        service.db_manager.close()
 
 
 @tool_wrapper
@@ -499,73 +410,14 @@ def commit_wiki_knowledge(
     user_config = current_user_config.get() or {}
     user_id = user_config.get("api_key", "SYSTEM")
 
-    try:
-        manager = WikiIntegrationManager()
-        result = manager.commit_knowledge(
-            title=title,
-            description=description,
-            tags=tags,
-            content=content,
-            topic_name=topic_name,
-            topic_update_text=topic_update_text,
-            image_paths=image_paths,
-            resource_paths=resource_paths,
-            resource_summaries=resource_summaries,
-            visibility=visibility
-        )
-
-        written_paths = result.get("written_paths", [])
-        indexing = {
-            "status": "skipped",
-            "indexed_files": [],
-            "retry_targets": [],
-        }
-        if written_paths:
-            from src.indexing.infrastructure.job_repository import IndexingJobRepository
-            queue_db = None
-            try:
-                queue_db = DatabaseManager()
-                job_repository = IndexingJobRepository(queue_db)
-                job_repository.enqueue(written_paths)
-                indexing = {
-                    "status": "queued",
-                    "indexed_files": [],
-                    "retry_targets": [],
-                    "queued_files": written_paths,
-                }
-            except Exception as queue_error:
-                saved_paths = ", ".join(written_paths)
-                raise DatabaseException(
-                    "지식 파일은 저장되었지만 인덱싱 작업 등록에 실패했습니다. "
-                    f"저장된 파일: {saved_paths}. 원인: {queue_error}"
-                ) from queue_error
-            finally:
-                if queue_db is not None:
-                    queue_db.close()
-        
-        # 지식 저널 생성 및 합성 성공 감사 로그 기록
-        log_audit(
-            action="KNOWLEDGE_COMMIT",
-            status="SUCCESS",
-            user_id=user_id,
-            payload={
-                "title": title,
-                "qa_path": result["qa_file_path"],
-                "topic_name": topic_name,
-                "topic_path": result["topic_file_path"],
-                "resources_count": len(result["all_resources"])
-            }
-        )
-        
-        return {
-            "qa_file_path": result["qa_file_path"],
-            "topic_file_path": result["topic_file_path"],
-            "details": result["details"],
-            "indexing": indexing,
-        }
-    except Exception as e:
-        log_audit("KNOWLEDGE_COMMIT", "FAILED", user_id=user_id, payload={"title": title, "error": str(e)})
-        raise
+    return KnowledgeCommitApiHandler(
+        runtime_factory=create_knowledge_commit_runtime,
+        audit=log_audit,
+    ).commit(
+        user_id=user_id, title=title, description=description, tags=tags, content=content,
+        topic_name=topic_name, topic_update_text=topic_update_text, image_paths=image_paths,
+        resource_paths=resource_paths, resource_summaries=resource_summaries, visibility=visibility,
+    )
 
 
 @tool_wrapper
@@ -577,37 +429,12 @@ def run_wiki_indexing(file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
     user_config = current_user_config.get() or {}
     user_id = user_config.get("api_key", "SYSTEM")
 
-    try:
-        db_manager = DatabaseManager()
-        db_manager.connect()
-    except Exception as e:
-        log_audit("VECTOR_INDEXING_RUN", "FAILED", user_id=user_id, payload={"error": f"DB 연결 실패: {e}"})
-        raise DatabaseException(f"인덱싱 데이터베이스 연결 실패: {e}") from e
-        
-    try:
-        if EMBEDDING_PROVIDER == "openai":
-            embedding_service = OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
-        elif EMBEDDING_PROVIDER == "bge-m3":
-            embedding_service = BGEM3EmbeddingService()
-        else:
-            embedding_service = FakeEmbeddingService(dimension=EMBEDDING_DIM)
-            
-        indexer = create_wiki_indexer(db_manager, embedding_service)
-        stats = indexer.run_indexing(file_paths=file_paths)
-        
-        # 인덱싱 완료 감사 로그 성공 기록
-        log_audit(
-            action="VECTOR_INDEXING_RUN",
-            status="SUCCESS",
-            user_id=user_id,
-            payload={"stats": stats, "file_paths": file_paths}
-        )
-        return stats
-    except Exception as e:
-        log_audit("VECTOR_INDEXING_RUN", "FAILED", user_id=user_id, payload={"error": str(e)})
-        raise WikiBaseException(f"인덱싱 수행 중 치명적 에러 발생: {e}") from e
-    finally:
-        db_manager.close()
+    return IndexingRunApiHandler(
+        database_factory=DatabaseManager,
+        embedding_factory=_embedding_service,
+        indexer_factory=create_wiki_indexer,
+        audit=log_audit,
+    ).run(file_paths, user_id)
 
 
 @tool_wrapper
@@ -618,72 +445,12 @@ def retry_wiki_indexing(limit: int = 100, force: bool = True) -> Dict[str, Any]:
 
     from src.indexing.infrastructure.job_repository import IndexingJobRepository
 
-    db_manager = DatabaseManager()
-    repository = IndexingJobRepository(db_manager)
-    try:
-        jobs = repository.claim(limit=limit, force=force)
-        if not jobs:
-            return {"status": "empty", "processed": 0, "jobs": []}
+    from src.settings.service import UserSettingsService
 
-        jobs_by_owner = defaultdict(list)
-        for job in jobs:
-            jobs_by_owner[job["owner_id"]].append(job["file_path"])
-
-        processed = 0
-        results = []
-        for owner_id, file_paths in jobs_by_owner.items():
-            from src.settings.service import UserSettingsService
-
-            settings_service = UserSettingsService()
-            try:
-                stored_config = settings_service.get_runtime_config(owner_id)
-            finally:
-                settings_service.db_manager.close()
-
-            owner_config = {
-                "api_key": f"background:{owner_id}",
-                "user_id": owner_id,
-                **stored_config,
-            }
-            context_token = current_user_config.set(owner_config)
-            try:
-                response = json.loads(run_wiki_indexing(file_paths=file_paths))
-                if response.get("success"):
-                    repository.complete(file_paths, owner_id=owner_id)
-                    processed += len(file_paths)
-                    results.append({
-                        "owner_id": owner_id,
-                        "status": "success",
-                        "file_paths": file_paths,
-                        "stats": response.get("data"),
-                    })
-                else:
-                    error = response.get("message") or "Indexing retry failed"
-                    repository.fail(file_paths, error, owner_id=owner_id)
-                    results.append({
-                        "owner_id": owner_id,
-                        "status": "failed",
-                        "file_paths": file_paths,
-                        "error": error,
-                    })
-            except Exception as owner_error:
-                repository.fail(file_paths, str(owner_error), owner_id=owner_id)
-                results.append({
-                    "owner_id": owner_id,
-                    "status": "failed",
-                    "file_paths": file_paths,
-                    "error": str(owner_error),
-                })
-            finally:
-                current_user_config.reset(context_token)
-
-        return {
-            "status": "success" if processed == len(jobs) else "partial_failure",
-            "processed": processed,
-            "claimed": len(jobs),
-            "results": results,
-        }
-    except Exception as e:
-        raise WikiBaseException(f"인덱싱 재시도 중 오류 발생: {e}") from e
-    finally:
-        db_manager.close()
+    return IndexingRetryApiHandler(
+        database_factory=DatabaseManager,
+        repository_factory=IndexingJobRepository,
+        settings_factory=UserSettingsService,
+        run_indexing=run_wiki_indexing,
+        config_context=current_user_config,
+    ).retry(limit, force)

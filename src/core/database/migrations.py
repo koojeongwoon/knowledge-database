@@ -764,6 +764,80 @@ def _extend_ontology_search_feedback(cur) -> None:
     """)
 
 
+def _create_knowledge_baselines(cur) -> None:
+    """Create an owner-scoped immutable store kept outside live retrieval."""
+    dimension = int(EMBEDDING_DIM)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_baseline_drafts (
+            draft_id UUID PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            name VARCHAR(160) NOT NULL,
+            version VARCHAR(80) NOT NULL,
+            purpose TEXT NOT NULL,
+            base_release_id UUID,
+            source_paths TEXT[] NOT NULL,
+            source_hashes JSONB NOT NULL,
+            directory_path VARCHAR(512) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            confirmed_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT uq_baseline_draft_version UNIQUE (owner_id, name, version),
+            CONSTRAINT ck_baseline_draft_status CHECK (status IN ('pending', 'confirmed', 'rejected'))
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS knowledge_baseline_releases (
+            release_id UUID PRIMARY KEY,
+            owner_id VARCHAR(50) NOT NULL,
+            name VARCHAR(160) NOT NULL,
+            version VARCHAR(80) NOT NULL,
+            purpose TEXT NOT NULL,
+            base_release_id UUID REFERENCES knowledge_baseline_releases(release_id),
+            directory_path VARCHAR(512) NOT NULL,
+            manifest_hash CHAR(64) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'confirmed',
+            confirmed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            retired_at TIMESTAMP WITH TIME ZONE,
+            revoked_at TIMESTAMP WITH TIME ZONE,
+            CONSTRAINT uq_baseline_release_version UNIQUE (owner_id, name, version),
+            CONSTRAINT ck_baseline_release_status CHECK (status IN ('confirmed', 'retired', 'revoked'))
+        );
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS knowledge_baseline_documents (
+            release_id UUID NOT NULL REFERENCES knowledge_baseline_releases(release_id) ON DELETE CASCADE,
+            owner_id VARCHAR(50) NOT NULL,
+            file_path VARCHAR(512) NOT NULL,
+            snapshot_path VARCHAR(512) NOT NULL,
+            chunk_index INT NOT NULL,
+            doc_type VARCHAR(50) NOT NULL,
+            title VARCHAR(256) NOT NULL,
+            description TEXT,
+            tags TEXT[],
+            content TEXT NOT NULL,
+            parent_content TEXT NOT NULL,
+            raw_frontmatter JSONB,
+            content_hash CHAR(64) NOT NULL,
+            embedding VECTOR({dimension}),
+            PRIMARY KEY (release_id, file_path, chunk_index)
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_baseline_documents_owner_release_idx
+        ON knowledge_baseline_documents (owner_id, release_id);
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_baseline_documents_fts_idx
+        ON knowledge_baseline_documents USING gin (
+            to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, ''))
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_baseline_documents_embedding_idx
+        ON knowledge_baseline_documents USING hnsw (embedding vector_cosine_ops);
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -782,6 +856,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(15, "create_ontology_shadow_events", _create_ontology_shadow_events),
     Migration(16, "extend_ontology_relation_lifecycle", _extend_ontology_relation_lifecycle),
     Migration(17, "extend_ontology_search_feedback", _extend_ontology_search_feedback),
+    Migration(18, "create_knowledge_baselines", _create_knowledge_baselines),
 )
 
 

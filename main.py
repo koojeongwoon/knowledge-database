@@ -3,7 +3,7 @@ import json
 import sys
 from src.core.database.factory import DatabaseManager
 from src.indexing.composition import create_wiki_indexer
-from src.retrieval.application.service import WikiSearcher
+from src.retrieval.composition import create_wiki_searcher
 from src.core.config import EMBEDDING_DIM, EMBEDDING_PROVIDER
 from src.core.config import current_user_config
 
@@ -65,7 +65,7 @@ def cmd_search(args):
     db_manager = DatabaseManager()
     try:
         embedding_service = get_embedding_service()
-        searcher = WikiSearcher(db_manager=db_manager, embedding_service=embedding_service)
+        searcher = create_wiki_searcher(db_manager, embedding_service)
         results = searcher.search(args.query, limit=args.limit)
         if not results:
             print("No matching documents found.")
@@ -133,10 +133,7 @@ def cmd_evaluate_search(args):
     owner_token = activate_owner_context(args.owner_id)
     db_manager = DatabaseManager()
     try:
-        searcher = WikiSearcher(
-            db_manager=db_manager,
-            embedding_service=get_embedding_service(),
-        )
+        searcher = create_wiki_searcher(db_manager, get_embedding_service())
         cases = load_evaluation_cases(args.cases)
         report = evaluate_search(cases, searcher.search, limit=args.limit)
         rendered = json.dumps(report, ensure_ascii=False, indent=2)
@@ -155,7 +152,7 @@ def cmd_run_blind_search(args):
     owner_token = activate_owner_context(args.owner_id)
     db_manager = DatabaseManager()
     try:
-        searcher = WikiSearcher(db_manager=db_manager, embedding_service=get_embedding_service())
+        searcher = create_wiki_searcher(db_manager, get_embedding_service())
         report = run_blind_search(load_blind_queries(args.queries), searcher.search, args.limit)
         rendered = json.dumps(report, ensure_ascii=False, indent=2)
         Path(args.output).write_text(rendered + "\n", encoding="utf-8")
@@ -224,7 +221,7 @@ def cmd_diagnose_search_stages(args):
     owner_token = activate_owner_context(args.owner_id)
     db_manager = DatabaseManager()
     try:
-        searcher = WikiSearcher(db_manager=db_manager, embedding_service=get_embedding_service())
+        searcher = create_wiki_searcher(db_manager, get_embedding_service())
         answers = json.loads(Path(args.answers).read_text(encoding="utf-8"))
         report = diagnose_retrieval_stages(load_blind_queries(args.queries), answers, searcher)
         rendered = json.dumps(report, ensure_ascii=False, indent=2)

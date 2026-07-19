@@ -27,6 +27,9 @@ from src.api.agent_tool import (
     stage_wiki_learning_knowledge_candidates,
     review_wiki_learning_knowledge_candidate,
     commit_wiki_learning_knowledge_candidate,
+    prepare_wiki_knowledge_baseline,
+    confirm_wiki_knowledge_baseline,
+    search_wiki_knowledge_baseline,
 )
 from src.api.middleware import MCPAuthMiddleware
 from src.core.database.factory import DatabaseManager
@@ -68,6 +71,10 @@ mcp = FastMCP(
        'stage_learning_knowledge_candidates'에 저장하십시오. 후보를 사용자에게 하나씩 보여준 뒤 명시적인 선택에만
        'review_learning_knowledge_candidate'를 호출하십시오. approved=true가 된 후보만
        'commit_learning_knowledge_candidate'로 저장할 수 있으며 conflict나 correction을 기존 문서에 자동 덮어쓰지 마십시오.
+    10. 기준본의 초안 준비, 확정, 검색 적용은 각각 사용자의 명시적 요청이 있을 때만 수행하십시오.
+        확정본을 최신화할 때는 기존 버전을 수정하지 말고 base_release_id를 지정한 새 버전 초안을 준비하십시오.
+        새 버전이 확정되어도 기존 업무의 적용 버전을 자동으로 전환하지 말고, 기준본 검색 결과가 없을 때
+        일반 지식 검색으로 자동 fallback하지 마십시오.
     """
 )
 
@@ -78,6 +85,33 @@ def search_wiki_knowledge(query: str, limit: int = 5) -> str:
     관련성이 높은 마크다운 지식 조각 및 인용 정보를 반환합니다.
     """
     return retrieve_wiki_knowledge(query, limit)
+
+
+@mcp.tool(name="prepare_knowledge_baseline")
+def prepare_knowledge_baseline(
+    name: str,
+    version: str,
+    purpose: str,
+    source_paths: List[str],
+    base_release_id: Optional[str] = None,
+) -> str:
+    """명시적으로 선택한 일반 지식으로 신규 또는 후속 기준본 초안만 준비하며 확정하지 않습니다."""
+    return prepare_wiki_knowledge_baseline(
+        name=name, version=version, purpose=purpose,
+        source_paths=source_paths, base_release_id=base_release_id,
+    )
+
+
+@mcp.tool(name="confirm_knowledge_baseline")
+def confirm_knowledge_baseline(draft_id: str) -> str:
+    """사용자가 명시적으로 승인한 기준본 초안을 불변 확정본으로 만듭니다."""
+    return confirm_wiki_knowledge_baseline(draft_id)
+
+
+@mcp.tool(name="search_knowledge_baseline")
+def search_knowledge_baseline(query: str, release_id: str, limit: int = 5) -> str:
+    """지정한 확정 기준본만 검색하며 일반 지식으로 자동 fallback하지 않습니다."""
+    return search_wiki_knowledge_baseline(query, release_id, limit)
 
 
 @mcp.tool(name="create_inbox_markdown")
