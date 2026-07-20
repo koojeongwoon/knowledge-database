@@ -177,7 +177,7 @@ def prepare_wiki_learning_session(
         return str(response.get("data") or "")
 
     try:
-        return LearningPreparationService(
+        prepared = LearningPreparationService(
             inbox_service=InboxService(owner_id),
             knowledge_search=knowledge_search,
         ).prepare(
@@ -189,6 +189,13 @@ def prepare_wiki_learning_session(
             inbox_item_ids=inbox_item_ids,
             knowledge_limit=knowledge_limit,
         )
+        due = _learning_api_handler().list_due_reviews(owner_id, 20)
+        prepared["due_review_summary"] = {
+            "count": due["count"],
+            "reviews": due["reviews"],
+            "prompt_before_new_learning": due["count"] > 0,
+        }
+        return prepared
     except ValueError as exc:
         raise InvalidArgumentException(str(exc)) from exc
 
@@ -202,6 +209,9 @@ def plan_wiki_learning_feedback(
     evidence_refs: Optional[List[str]] = None,
     hint: Optional[str] = None,
     next_question: Optional[str] = None,
+    learning_dimension: str = "retrieval",
+    transfer_level: str = "none",
+    support_level: str = "none",
 ) -> Dict[str, Any]:
     try:
         return LearningFeedbackPlanner().plan(
@@ -212,6 +222,9 @@ def plan_wiki_learning_feedback(
             evidence_refs=evidence_refs,
             hint=hint,
             next_question=next_question,
+            learning_dimension=learning_dimension,
+            transfer_level=transfer_level,
+            support_level=support_level,
         )
     except ValueError as exc:
         raise InvalidArgumentException(str(exc)) from exc
@@ -267,11 +280,13 @@ def record_wiki_learning_attempt(
     next_question_type: str = "retrieval",
     next_evidence_refs: Optional[List[str]] = None,
     client_request_id: Optional[str] = None,
+    next_transfer_level: str = "none",
 ) -> Dict[str, Any]:
     return _learning_api_handler().record_attempt(
         _authenticated_learning_owner(), session_id, question_id, answer,
         assessment, confidence, feedback_plan, missing_concepts, misconceptions,
         evidence_refs, next_question, next_question_type, next_evidence_refs, client_request_id,
+        next_transfer_level,
     )
 
 
@@ -279,6 +294,12 @@ def record_wiki_learning_attempt(
 @with_fresh_user_settings
 def resume_wiki_learning_session(session_id: Optional[str] = None) -> Dict[str, Any]:
     return _learning_api_handler().resume(_authenticated_learning_owner(), session_id)
+
+
+@tool_wrapper
+@with_fresh_user_settings
+def prepare_wiki_learning_completion(session_id: str) -> Dict[str, Any]:
+    return _learning_api_handler().prepare_completion(_authenticated_learning_owner(), session_id)
 
 
 @tool_wrapper

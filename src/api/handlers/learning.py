@@ -33,11 +33,12 @@ class LearningSessionApiHandler:
                        missing_concepts: Optional[List[str]], misconceptions: Optional[List[str]],
                        evidence_refs: Optional[List[str]], next_question: Optional[str],
                        next_question_type: str, next_evidence_refs: Optional[List[str]],
-                       client_request_id: Optional[str]) -> Dict[str, Any]:
+                       client_request_id: Optional[str], next_transfer_level: str) -> Dict[str, Any]:
         return self._execute(lambda service: service.record_attempt(
             owner_id, session_id, question_id, answer, assessment, confidence, feedback_plan,
             missing_concepts, misconceptions, evidence_refs, next_question, next_question_type,
             next_evidence_refs, client_request_id,
+            next_transfer_level,
         ))
 
     def resume(self, owner_id: str, session_id: Optional[str]) -> Dict[str, Any]:
@@ -45,6 +46,9 @@ class LearningSessionApiHandler:
 
     def complete(self, owner_id: str, session_id: str, summary: Optional[str]) -> Dict[str, Any]:
         return self._execute(lambda service: service.complete(owner_id, session_id, summary))
+
+    def prepare_completion(self, owner_id: str, session_id: str) -> Dict[str, Any]:
+        return self._execute(lambda service: service.prepare_completion(owner_id, session_id))
 
     def list_due_reviews(self, owner_id: str, limit: int) -> Dict[str, Any]:
         return self._execute(lambda service: service.list_due_reviews(owner_id, limit))

@@ -126,6 +126,12 @@ class LearningPreparationService:
                 },
                 "rule": "의미 판정은 클라이언트 LLM이 수행하고 서버는 별도 LLM을 호출하지 않는다.",
             },
+            "learning_evidence_protocol": [
+                "정의 재현은 retrieval, 원리 설명은 comprehension, 새 상황 적용은 transfer로 구분한다.",
+                "transfer는 유사한 변형인 near와 맥락이 달라진 far를 구분한다.",
+                "힌트 없이 성공한 경우만 independent_success로 본다.",
+                "retrieval 숙달만으로 학습 완료를 주장하지 않고 application 질문으로 전이를 확인한다.",
+            ],
             "first_question": first_question if effective_scope != "none" else None,
             "tutor_protocol": [
                 "처음에는 first_question 하나만 사용자에게 제시한다.",

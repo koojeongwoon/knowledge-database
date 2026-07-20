@@ -2,7 +2,7 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
-from src.learning.domain.review import next_review_interval
+from src.learning.domain.review import next_delayed_transfer_level, next_review_interval
 
 
 def _row(cur, value) -> Optional[Dict[str, Any]]:
@@ -57,11 +57,13 @@ class LearningSessionRepository:
             created = _row(cur, cur.fetchone())
             cur.execute("""
                 INSERT INTO knowledge_learning_questions (
-                    question_id, session_id, owner_id, sequence_no, question_type, prompt, evidence_refs
-                ) VALUES (%s, %s, %s, 1, %s, %s, %s)
+                    question_id, session_id, owner_id, sequence_no, question_type,
+                    learning_dimension, transfer_level, prompt, evidence_refs
+                ) VALUES (%s, %s, %s, 1, %s, %s, %s, %s, %s)
             """, (
                 question["question_id"], session["session_id"], owner_id,
-                question["question_type"], question["prompt"], question["evidence_refs"],
+                question["question_type"], question["learning_dimension"], question["transfer_level"],
+                question["prompt"], question["evidence_refs"],
             ))
             for source in sources:
                 cur.execute("""
@@ -123,13 +125,17 @@ class LearningSessionRepository:
                 INSERT INTO knowledge_learning_attempts (
                     attempt_id, session_id, question_id, owner_id, client_request_id,
                     answer, assessment, confidence, missing_concepts, misconceptions,
-                    evidence_refs, feedback_plan
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    evidence_refs, learning_dimension, transfer_level, support_level,
+                    independent_success, calibration_signal, feedback_plan
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 RETURNING attempt_id, session_id, question_id, created_at
             """, (
                 attempt["attempt_id"], attempt["session_id"], attempt["question_id"], owner_id,
                 request_id, attempt["answer"], attempt["assessment"], attempt["confidence"],
                 attempt["missing_concepts"], attempt["misconceptions"], attempt["evidence_refs"],
+                attempt["learning_dimension"], attempt["transfer_level"], attempt["support_level"],
+                attempt["independent_success"],
+                attempt["calibration_signal"],
                 json.dumps(attempt["feedback_plan"]),
             ))
             created = _row(cur, cur.fetchone())
@@ -170,12 +176,15 @@ class LearningSessionRepository:
                 next_sequence = cur.fetchone()[0]
                 cur.execute("""
                     INSERT INTO knowledge_learning_questions (
-                        question_id, session_id, owner_id, sequence_no, question_type, prompt, evidence_refs
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING question_id, sequence_no, question_type, prompt, evidence_refs, created_at
+                        question_id, session_id, owner_id, sequence_no, question_type,
+                        learning_dimension, transfer_level, prompt, evidence_refs
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING question_id, sequence_no, question_type, learning_dimension,
+                              transfer_level, prompt, evidence_refs, created_at
                 """, (
                     next_question["question_id"], attempt["session_id"], owner_id, next_sequence,
-                    next_question["question_type"], next_question["prompt"], next_question["evidence_refs"],
+                    next_question["question_type"], next_question["learning_dimension"],
+                    next_question["transfer_level"], next_question["prompt"], next_question["evidence_refs"],
                 ))
                 created_question = _row(cur, cur.fetchone())
             cur.execute("""
@@ -210,10 +219,13 @@ class LearningSessionRepository:
             """, (session["session_id"], owner_id))
             sources = [_row(cur, value) for value in cur.fetchall()]
             cur.execute("""
-                SELECT q.question_id, q.sequence_no, q.question_type, q.prompt, q.evidence_refs,
+                SELECT q.question_id, q.sequence_no, q.question_type, q.learning_dimension,
+                       q.transfer_level, q.prompt, q.evidence_refs,
                        a.attempt_id, a.answer, a.assessment, a.confidence, a.missing_concepts,
                        a.misconceptions, a.evidence_refs AS attempt_evidence_refs,
-                       a.feedback_plan, a.created_at AS attempted_at
+                       a.learning_dimension AS attempt_learning_dimension,
+                       a.transfer_level AS attempt_transfer_level, a.support_level,
+                       a.independent_success, a.feedback_plan, a.created_at AS attempted_at
                 FROM knowledge_learning_questions q
                 LEFT JOIN LATERAL (
                     SELECT * FROM knowledge_learning_attempts a
@@ -255,10 +267,32 @@ class LearningSessionRepository:
             question_count, attempt_count = cur.fetchone()
             return {**session, "question_count": question_count, "attempt_count": attempt_count, "idempotent_replay": False}
 
+    def completion_evidence(self, owner_id: str, session_id: str) -> Dict[str, Any]:
+        with self.db_manager.cursor() as cur:
+            cur.execute("""
+                SELECT status, plan_snapshot FROM knowledge_learning_sessions
+                WHERE session_id = %s AND owner_id = %s
+            """, (session_id, owner_id))
+            session = _row(cur, cur.fetchone())
+            if not session:
+                raise KeyError("학습 세션을 찾을 수 없습니다.")
+            cur.execute("""
+                SELECT learning_dimension, transfer_level, COUNT(*) AS attempt_count,
+                       COUNT(*) FILTER (
+                           WHERE assessment = 'mastered' AND independent_success = TRUE
+                       ) AS independent_mastery_count
+                FROM knowledge_learning_attempts
+                WHERE session_id = %s AND owner_id = %s
+                GROUP BY learning_dimension, transfer_level
+                ORDER BY learning_dimension, transfer_level
+            """, (session_id, owner_id))
+            return {"session": session, "evidence_rows": [_row(cur, value) for value in cur.fetchall()]}
+
     def list_due_reviews(self, owner_id: str, limit: int) -> List[Dict[str, Any]]:
         with self.db_manager.cursor() as cur:
             cur.execute("""
                 SELECT review_id, session_id, question_id, topic, prompt, evidence_refs,
+                       learning_dimension, transfer_level,
                        review_priority, interval_days, due_at, review_count, last_reviewed_at
                 FROM knowledge_learning_reviews
                 WHERE owner_id = %s AND status = 'scheduled' AND due_at <= CURRENT_TIMESTAMP
@@ -290,7 +324,7 @@ class LearningSessionRepository:
                     return {**existing, "idempotent_replay": True}
 
             cur.execute("""
-                SELECT interval_days, status FROM knowledge_learning_reviews
+                SELECT interval_days, status, transfer_level FROM knowledge_learning_reviews
                 WHERE review_id = %s AND owner_id = %s FOR UPDATE
             """, (review["review_id"], owner_id))
             current = cur.fetchone()
@@ -299,18 +333,29 @@ class LearningSessionRepository:
             if current[1] != "scheduled":
                 raise ValueError("중지된 복습 항목은 기록할 수 없습니다.")
             previous_days = current[0]
+            current_transfer_level = current[2]
+            if review["transfer_level"] != current_transfer_level:
+                raise ValueError("현재 복습 전이 수준과 판정의 transfer_level이 일치하지 않습니다.")
             next_days = next_review_interval(previous_days, review["assessment"], review["confidence"])
+            next_transfer_level = next_delayed_transfer_level(
+                current_transfer_level, review["assessment"], review["independent_success"],
+            )
             review_attempt_id = str(uuid.uuid4())
             cur.execute("""
                 INSERT INTO knowledge_learning_review_attempts (
                     review_attempt_id, review_id, owner_id, client_request_id, answer,
-                    assessment, confidence, feedback_plan, previous_interval_days, next_interval_days
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    assessment, confidence, feedback_plan, previous_interval_days, next_interval_days,
+                    learning_dimension, transfer_level, support_level, independent_success,
+                    calibration_signal
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING review_attempt_id, review_id, reviewed_at
             """, (
                 review_attempt_id, review["review_id"], owner_id, request_id, review["answer"],
                 review["assessment"], review["confidence"], json.dumps(review["feedback_plan"]),
                 previous_days, next_days,
+                review["learning_dimension"], review["transfer_level"], review["support_level"],
+                review["independent_success"],
+                review["calibration_signal"],
             ))
             created = _row(cur, cur.fetchone())
             cur.execute("""
@@ -320,14 +365,17 @@ class LearningSessionRepository:
                     review_count = review_count + 1,
                     last_reviewed_at = CURRENT_TIMESTAMP,
                     review_priority = %s,
+                    transfer_level = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE review_id = %s AND owner_id = %s
             """, (
-                next_days, next_days, review["review_priority"], review["review_id"], owner_id,
+                next_days, next_days, review["review_priority"], next_transfer_level,
+                review["review_id"], owner_id,
             ))
             return {
                 **created, "previous_interval_days": previous_days,
-                "next_interval_days": next_days, "idempotent_replay": False,
+                "next_interval_days": next_days, "next_transfer_level": next_transfer_level,
+                "idempotent_replay": False,
             }
 
     def stage_knowledge_candidates(

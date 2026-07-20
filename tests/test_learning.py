@@ -6,8 +6,12 @@ from src.api.agent_tool import commit_wiki_learning_knowledge_candidate
 from src.core.config import current_user_config
 from src.learning.application.service import LearningPreparationService
 from src.learning.application.session_service import LearningSessionService
+from src.learning.domain.completion import LearningCompletionPolicy
+from src.learning.domain.calibration import calibration_feedback, calibration_signal
 from src.learning.domain.feedback import LearningFeedbackPlanner
-from src.learning.domain.review import next_review_interval
+from src.learning.domain.review import (
+    delayed_transfer_question_contract, next_delayed_transfer_level, next_review_interval,
+)
 
 
 class LearningPreparationServiceTests(unittest.TestCase):
@@ -96,6 +100,60 @@ class LearningPreparationServiceTests(unittest.TestCase):
 
 
 class LearningFeedbackPlannerTests(unittest.TestCase):
+    def test_high_confidence_failure_is_overconfidence(self):
+        result = LearningFeedbackPlanner().plan(
+            assessment="misconception", confidence="high",
+            misconceptions=["잘못된 전제"], evidence_refs=["topics/example.md"],
+        )
+
+        calibration = result["metacognitive_calibration"]
+        self.assertEqual(calibration["signal"], "overconfident")
+        self.assertEqual(calibration["calibration_action"], "prediction_reflection")
+        self.assertEqual(result["review_priority"], "critical")
+
+    def test_low_confidence_independent_mastery_is_underconfidence(self):
+        result = LearningFeedbackPlanner().plan(
+            assessment="mastered", confidence="low", evidence_refs=["topics/example.md"],
+        )
+
+        self.assertEqual(result["metacognitive_calibration"]["signal"], "underconfident")
+
+    def test_supported_answer_has_insufficient_calibration_evidence(self):
+        result = LearningFeedbackPlanner().plan(
+            assessment="mastered", confidence="high", evidence_refs=["topics/example.md"],
+            support_level="light", learning_dimension="comprehension",
+        )
+
+        self.assertEqual(result["metacognitive_calibration"]["signal"], "insufficient_evidence")
+
+    def test_far_transfer_without_support_is_independent_evidence(self):
+        result = LearningFeedbackPlanner().plan(
+            assessment="mastered", confidence="high",
+            evidence_refs=["topics/oauth.md"], learning_dimension="transfer",
+            transfer_level="far", support_level="none",
+        )
+
+        self.assertEqual(result["learning_evidence"]["dimension"], "transfer")
+        self.assertTrue(result["learning_evidence"]["independent_success"])
+        self.assertEqual(result["suggested_review_days"], 14)
+
+    def test_supported_success_requires_retry_without_support(self):
+        result = LearningFeedbackPlanner().plan(
+            assessment="mastered", evidence_refs=["topics/oauth.md"],
+            learning_dimension="comprehension", support_level="light",
+        )
+
+        self.assertFalse(result["learning_evidence"]["independent_success"])
+        self.assertEqual(result["next_action"], "fade_support_then_retry")
+        self.assertTrue(result["should_reask"])
+
+    def test_transfer_dimension_requires_transfer_level(self):
+        with self.assertRaisesRegex(ValueError, "transfer_level"):
+            LearningFeedbackPlanner().plan(
+                assessment="mastered", evidence_refs=["topics/oauth.md"],
+                learning_dimension="transfer",
+            )
+
     def test_mastered_advances_without_server_llm(self):
         result = LearningFeedbackPlanner().plan(
             assessment="mastered",
@@ -153,6 +211,40 @@ class LearningFeedbackPlannerTests(unittest.TestCase):
 
 
 class LearningSessionServiceTests(unittest.TestCase):
+    def test_new_session_requires_all_independent_completion_evidence(self):
+        repository = Mock()
+        repository.completion_evidence.return_value = {
+            "session": {"status": "active", "plan_snapshot": {"schema_version": 2}},
+            "evidence_rows": [
+                {"learning_dimension": "retrieval", "transfer_level": "none", "attempt_count": 1, "independent_mastery_count": 1},
+                {"learning_dimension": "comprehension", "transfer_level": "none", "attempt_count": 1, "independent_mastery_count": 1},
+                {"learning_dimension": "transfer", "transfer_level": "near", "attempt_count": 1, "independent_mastery_count": 1},
+            ],
+        }
+        service = LearningSessionService(repository)
+
+        result = service.complete("owner", "11111111-1111-4111-8111-111111111111")
+
+        self.assertFalse(result["completed"])
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(result["completion_readiness"]["missing_evidence"], ["far_transfer"])
+        self.assertEqual(result["completion_readiness"]["next_question_contract"]["transfer_level"], "far")
+        repository.complete.assert_not_called()
+
+    def test_legacy_session_remains_completable_without_new_gate(self):
+        repository = Mock()
+        repository.completion_evidence.return_value = {
+            "session": {"status": "active", "plan_snapshot": {"schema_version": 1}},
+            "evidence_rows": [],
+        }
+        repository.complete.return_value = {"session_id": "session", "status": "completed"}
+        service = LearningSessionService(repository)
+
+        result = service.complete("owner", "11111111-1111-4111-8111-111111111111")
+
+        self.assertTrue(result["completed"])
+        repository.complete.assert_called_once()
+
     def test_start_stores_only_source_reference_snapshot(self):
         repository = Mock()
         repository.start.return_value = {"session_id": "created", "status": "active"}
@@ -198,6 +290,26 @@ class LearningSessionServiceTests(unittest.TestCase):
         self.assertIsNone(attempt["review_schedule"])
         self.assertEqual(next_question["question_type"], "retrieval")
 
+    def test_application_question_and_attempt_capture_transfer_evidence(self):
+        repository = Mock()
+        repository.record_attempt.return_value = {"attempt_id": "created"}
+        service = LearningSessionService(repository)
+
+        service.record_attempt(
+            "owner", "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222", "답변", "mastered", "high",
+            {"learning_evidence": {"dimension": "transfer", "transfer_level": "far", "support_level": "none"}},
+            next_question="다른 시스템에 적용해 보세요.", next_question_type="application",
+            next_transfer_level="far",
+        )
+
+        attempt = repository.record_attempt.call_args.args[1]
+        next_question = repository.record_attempt.call_args.args[2]
+        self.assertEqual(attempt["learning_dimension"], "transfer")
+        self.assertTrue(attempt["independent_success"])
+        self.assertEqual(next_question["learning_dimension"], "transfer")
+        self.assertEqual(next_question["transfer_level"], "far")
+
     def test_resume_and_complete_reject_invalid_session_uuid(self):
         service = LearningSessionService(Mock())
         with self.assertRaisesRegex(ValueError, "UUID"):
@@ -234,6 +346,20 @@ class LearningSessionServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "limit"):
             service.list_due_reviews("owner", 0)
 
+    def test_due_review_is_returned_as_delayed_transfer_contract(self):
+        repository = Mock()
+        repository.list_due_reviews.return_value = [{
+            "review_id": "review", "prompt": "PKCE를 설명하세요.", "transfer_level": "far",
+        }]
+        service = LearningSessionService(repository)
+
+        result = service.list_due_reviews("owner")
+
+        contract = result["reviews"][0]["question_contract"]
+        self.assertEqual(contract["question_type"], "application")
+        self.assertEqual(contract["transfer_level"], "far")
+        self.assertIn("그대로 반복하지 않고", contract["rules"][0])
+
     def test_record_review_validates_and_delegates(self):
         repository = Mock()
         repository.record_review.return_value = {"next_interval_days": 6}
@@ -241,12 +367,19 @@ class LearningSessionServiceTests(unittest.TestCase):
 
         result = service.record_review(
             "owner", "33333333-3333-4333-8333-333333333333", "복습 답변",
-            "mastered", "high", {"review_priority": "low"}, "review-request-1",
+            "mastered", "high", {
+                "review_priority": "low",
+                "learning_evidence": {
+                    "dimension": "transfer", "transfer_level": "near", "support_level": "none",
+                },
+            }, "review-request-1",
         )
 
         self.assertEqual(result["next_interval_days"], 6)
         review = repository.record_review.call_args.args[1]
         self.assertEqual(review["assessment"], "mastered")
+        self.assertTrue(review["independent_success"])
+        self.assertEqual(review["transfer_level"], "near")
         self.assertEqual(review["client_request_id"], "review-request-1")
 
     def test_prepare_knowledge_candidates_returns_client_drafting_pack(self):
@@ -311,6 +444,16 @@ class LearningSessionServiceTests(unittest.TestCase):
 
 
 class LearningReviewIntervalTests(unittest.TestCase):
+    def test_independent_near_transfer_advances_to_far(self):
+        self.assertEqual(next_delayed_transfer_level("near", "mastered", True), "far")
+        self.assertEqual(next_delayed_transfer_level("near", "mastered", False), "near")
+
+    def test_review_contract_never_reasks_source_prompt_directly(self):
+        contract = delayed_transfer_question_contract({"prompt": "원 질문", "transfer_level": "near"})
+        self.assertEqual(contract["source_prompt"], "원 질문")
+        self.assertEqual(contract["learning_dimension"], "transfer")
+        self.assertEqual(contract["support_level"], "none")
+
     def test_mastery_expands_interval(self):
         self.assertEqual(next_review_interval(3, "mastered", "high"), 8)
         self.assertEqual(next_review_interval(3, "mastered", "medium"), 6)
@@ -319,6 +462,43 @@ class LearningReviewIntervalTests(unittest.TestCase):
         self.assertEqual(next_review_interval(10, "partial", "medium"), 3)
         self.assertEqual(next_review_interval(10, "misconception", "high"), 1)
         self.assertEqual(next_review_interval(10, "unknown", "low"), 1)
+
+
+class LearningCalibrationTests(unittest.TestCase):
+    def test_calibration_signal_compares_prediction_with_independent_result(self):
+        self.assertEqual(calibration_signal("partial", "high", "none"), "overconfident")
+        self.assertEqual(calibration_signal("mastered", "low", "none"), "underconfident")
+        self.assertEqual(calibration_signal("mastered", "high", "none"), "aligned")
+        self.assertEqual(calibration_signal("mastered", "high", "light"), "insufficient_evidence")
+
+    def test_overconfidence_feedback_requests_prediction_reflection(self):
+        result = calibration_feedback("overconfident")
+        self.assertEqual(result["calibration_action"], "prediction_reflection")
+
+
+class LearningCompletionPolicyTests(unittest.TestCase):
+    def test_supported_mastery_does_not_satisfy_completion(self):
+        result = LearningCompletionPolicy.evaluate([{
+            "learning_dimension": "retrieval", "transfer_level": "none",
+            "attempt_count": 2, "independent_mastery_count": 0,
+        }])
+
+        self.assertFalse(result["evidence"]["retrieval"]["verified"])
+        self.assertFalse(result["ready_to_complete"])
+
+    def test_all_four_evidence_dimensions_complete_gate(self):
+        rows = [
+            {"learning_dimension": "retrieval", "transfer_level": "none", "attempt_count": 1, "independent_mastery_count": 1},
+            {"learning_dimension": "comprehension", "transfer_level": "none", "attempt_count": 1, "independent_mastery_count": 1},
+            {"learning_dimension": "transfer", "transfer_level": "near", "attempt_count": 1, "independent_mastery_count": 1},
+            {"learning_dimension": "transfer", "transfer_level": "far", "attempt_count": 1, "independent_mastery_count": 1},
+        ]
+
+        result = LearningCompletionPolicy.evaluate(rows)
+
+        self.assertTrue(result["ready_to_complete"])
+        self.assertEqual(result["missing_evidence"], [])
+        self.assertIsNone(result["next_question_contract"])
 
 
 class LearningKnowledgeCommitTests(unittest.TestCase):

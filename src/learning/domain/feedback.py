@@ -1,8 +1,13 @@
 from typing import Any, Dict, List, Optional
 
+from src.learning.domain.calibration import calibration_feedback, calibration_signal
+
 
 VALID_ASSESSMENTS = {"mastered", "partial", "misconception", "unknown", "unverifiable"}
 VALID_CONFIDENCE = {"low", "medium", "high"}
+VALID_LEARNING_DIMENSIONS = {"retrieval", "comprehension", "transfer"}
+VALID_TRANSFER_LEVELS = {"none", "near", "far"}
+VALID_SUPPORT_LEVELS = {"none", "light", "substantial"}
 MAX_LIST_ITEMS = 20
 MAX_ITEM_LENGTH = 500
 
@@ -21,13 +26,29 @@ class LearningFeedbackPlanner:
         evidence_refs: Optional[List[str]] = None,
         hint: Optional[str] = None,
         next_question: Optional[str] = None,
+        learning_dimension: str = "retrieval",
+        transfer_level: str = "none",
+        support_level: str = "none",
     ) -> Dict[str, Any]:
         normalized_assessment = (assessment or "").strip().lower()
         normalized_confidence = (confidence or "medium").strip().lower()
+        dimension = (learning_dimension or "retrieval").strip().lower()
+        transfer = (transfer_level or "none").strip().lower()
+        support = (support_level or "none").strip().lower()
         if normalized_assessment not in VALID_ASSESSMENTS:
             raise ValueError("assessment는 mastered, partial, misconception, unknown, unverifiable 중 하나여야 합니다.")
         if normalized_confidence not in VALID_CONFIDENCE:
             raise ValueError("confidence는 low, medium, high 중 하나여야 합니다.")
+        if dimension not in VALID_LEARNING_DIMENSIONS:
+            raise ValueError("learning_dimension은 retrieval, comprehension, transfer 중 하나여야 합니다.")
+        if transfer not in VALID_TRANSFER_LEVELS:
+            raise ValueError("transfer_level은 none, near, far 중 하나여야 합니다.")
+        if support not in VALID_SUPPORT_LEVELS:
+            raise ValueError("support_level은 none, light, substantial 중 하나여야 합니다.")
+        if dimension == "transfer" and transfer == "none":
+            raise ValueError("transfer 판정에는 near 또는 far transfer_level이 필요합니다.")
+        if dimension != "transfer" and transfer != "none":
+            raise ValueError("transfer_level은 transfer 판정에서만 사용할 수 있습니다.")
 
         missing = _clean_list(missing_concepts)
         errors = _clean_list(misconceptions)
@@ -43,6 +64,18 @@ class LearningFeedbackPlanner:
             raise ValueError("학습 판정에는 최소 하나의 evidence_refs가 필요합니다.")
 
         plan = self._plan_for(normalized_assessment, normalized_confidence)
+        signal = calibration_signal(normalized_assessment, normalized_confidence, support)
+        if normalized_assessment == "mastered" and support != "none":
+            plan.update({
+                "next_action": "fade_support_then_retry",
+                "should_reask": True,
+                "review_priority": "medium",
+                "suggested_review_days": 3,
+            })
+        elif normalized_assessment == "mastered" and dimension == "transfer" and transfer == "far":
+            plan["suggested_review_days"] = 14
+        if signal == "overconfident":
+            plan["review_priority"] = "critical"
         if not safe_hint and normalized_assessment in ("partial", "misconception", "unknown"):
             concepts = missing or errors
             safe_hint = (
@@ -61,6 +94,16 @@ class LearningFeedbackPlanner:
             "evidence_refs": refs,
             "hint": safe_hint,
             "next_question": safe_next_question,
+            "learning_evidence": {
+                "dimension": dimension,
+                "transfer_level": transfer,
+                "support_level": support,
+                "independent_success": normalized_assessment == "mastered" and support == "none",
+            },
+            "metacognitive_calibration": {
+                "signal": signal,
+                **calibration_feedback(signal),
+            },
             **plan,
         }
 

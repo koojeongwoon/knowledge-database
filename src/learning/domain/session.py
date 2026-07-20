@@ -4,7 +4,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from src.learning.domain.feedback import VALID_ASSESSMENTS, VALID_CONFIDENCE
+from src.learning.domain.feedback import (
+    VALID_ASSESSMENTS, VALID_CONFIDENCE, VALID_LEARNING_DIMENSIONS,
+    VALID_SUPPORT_LEVELS, VALID_TRANSFER_LEVELS,
+)
+from src.learning.domain.calibration import calibration_signal
 from src.learning.domain.ports import UuidFactory
 from src.learning.domain.review import VALID_REVIEW_PRIORITIES
 
@@ -73,27 +77,55 @@ class LearningSessionPlanner:
             "session_id": self._uuid_factory(), "client_request_id": text(client_request_id, "client_request_id", 100, False),
             "topic": text(topic, "topic", 300), "requested_scope": requested_scope, "effective_scope": effective_scope,
             "goal": text(goal or "understand", "goal", 500), "level": level, "duration_minutes": duration_minutes,
-            "plan_snapshot": {"schema_version": 1, "source_refs": [f"{s['source_type']}:{s['source_ref']}" for s in clean_sources]},
+            "plan_snapshot": {
+                "schema_version": 2,
+                "source_refs": [f"{s['source_type']}:{s['source_ref']}" for s in clean_sources],
+                "completion_evidence": ["retrieval", "comprehension", "near_transfer", "far_transfer"],
+            },
         }
         question = {"question_id": self._uuid_factory(), "question_type": "diagnostic",
+                    "learning_dimension": "retrieval", "transfer_level": "none",
                     "prompt": text(first_question, "first_question", 4000), "evidence_refs": []}
         return StartLearningPlan(session, question, clean_sources)
 
     def attempt(self, session_id: str, question_id: str, answer: str, assessment: str, confidence: str,
                 feedback_plan: Dict[str, Any], missing_concepts: Optional[List[str]], misconceptions: Optional[List[str]],
                 evidence_refs: Optional[List[str]], next_question: Optional[str], next_question_type: str,
-                next_evidence_refs: Optional[List[str]], client_request_id: Optional[str]) -> AttemptPlan:
+                next_evidence_refs: Optional[List[str]], client_request_id: Optional[str],
+                next_transfer_level: str = "none") -> AttemptPlan:
         assessment, confidence = (assessment or "").lower(), (confidence or "").lower()
         if assessment not in VALID_ASSESSMENTS or confidence not in VALID_CONFIDENCE:
             raise ValueError("올바르지 않은 학습 판정 또는 확신도입니다.")
         if not isinstance(feedback_plan, dict):
             raise ValueError("feedback_plan은 객체여야 합니다.")
+        evidence = feedback_plan.get("learning_evidence") or {}
+        if not isinstance(evidence, dict):
+            raise ValueError("feedback_plan.learning_evidence는 객체여야 합니다.")
+        dimension = str(evidence.get("dimension") or "retrieval").lower()
+        transfer_level = str(evidence.get("transfer_level") or "none").lower()
+        support_level = str(evidence.get("support_level") or "none").lower()
+        if dimension not in VALID_LEARNING_DIMENSIONS or transfer_level not in VALID_TRANSFER_LEVELS:
+            raise ValueError("올바르지 않은 학습 차원 또는 전이 수준입니다.")
+        if support_level not in VALID_SUPPORT_LEVELS:
+            raise ValueError("올바르지 않은 지원 수준입니다.")
+        if (dimension == "transfer") != (transfer_level != "none"):
+            raise ValueError("전이 학습 차원에는 near 또는 far 전이 수준이 필요합니다.")
         question_type = (next_question_type or "retrieval").lower()
         if question_type not in VALID_QUESTION_TYPES:
             raise ValueError("올바르지 않은 다음 질문 유형입니다.")
         follow_up = None
         if next_question and str(next_question).strip():
+            next_dimension = "transfer" if question_type == "application" else "retrieval"
+            normalized_next_transfer = str(next_transfer_level or "none").lower()
+            if next_dimension == "transfer" and normalized_next_transfer == "none":
+                normalized_next_transfer = "near"
+            if normalized_next_transfer not in VALID_TRANSFER_LEVELS:
+                raise ValueError("올바르지 않은 다음 질문 전이 수준입니다.")
+            if next_dimension != "transfer" and normalized_next_transfer != "none":
+                raise ValueError("다음 질문의 transfer_level은 application에서만 사용할 수 있습니다.")
             follow_up = {"question_id": self._uuid_factory(), "question_type": question_type,
+                         "learning_dimension": next_dimension,
+                         "transfer_level": normalized_next_transfer,
                          "prompt": text(next_question, "next_question", 4000), "evidence_refs": string_list(next_evidence_refs)}
         attempt = {
             "attempt_id": self._uuid_factory(), "session_id": normalized_uuid(session_id, "session_id"),
@@ -101,6 +133,10 @@ class LearningSessionPlanner:
             "client_request_id": text(client_request_id, "client_request_id", 100, False), "answer": text(answer, "answer", 20000),
             "assessment": assessment, "confidence": confidence, "missing_concepts": string_list(missing_concepts),
             "misconceptions": string_list(misconceptions), "evidence_refs": string_list(evidence_refs),
+            "learning_dimension": dimension, "transfer_level": transfer_level,
+            "support_level": support_level,
+            "independent_success": assessment == "mastered" and support_level == "none",
+            "calibration_signal": calibration_signal(assessment, confidence, support_level),
             "feedback_plan": feedback_plan, "review_schedule": self.review_schedule(feedback_plan),
         }
         return AttemptPlan(attempt, follow_up)

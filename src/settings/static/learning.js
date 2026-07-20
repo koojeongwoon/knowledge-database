@@ -2,6 +2,10 @@ const $ = (selector) => document.querySelector(selector);
 const labels = {
   mastered: "충분히 설명", partial: "부분 이해", misconception: "오개념", unknown: "모름", unverifiable: "근거 부족",
   pending: "승인 대기", approved: "승인", rejected: "거절", committing: "저장 중", committed: "지식 저장",
+  retrieval: "인출", comprehension: "원리 이해", near_transfer: "Near 전이", far_transfer: "Far 전이",
+  near: "Near 복습", far: "Far 복습",
+  aligned: "일치", overconfident: "과신", underconfident: "과소신뢰", insufficient_evidence: "독립 증거 부족",
+  unassessed: "미측정", acquiring: "습득 중", transfer_ready: "전이 확인", retained: "장기 유지",
 };
 
 function node(tag, className, text) {
@@ -38,14 +42,59 @@ function renderMetrics(selector, values) {
   });
 }
 
+function percentage(value) {
+  return value === null || value === undefined ? "측정 전" : `${Math.round(value * 100)}%`;
+}
+
+function renderEvidence(data) {
+  const target = $("#learning-evidence"); target.replaceChildren();
+  Object.entries(data.learning_evidence || {}).forEach(([key, metrics]) => {
+    const item = node("article", "evidence-item");
+    item.append(
+      node("strong", "", labels[key] || key),
+      node("span", "evidence-rate", percentage(data.derived_metrics.independent_mastery_rates[key])),
+      node("small", "", `독립 성공 ${metrics.independent_mastery_count} / 시도 ${metrics.attempt_count}`),
+    );
+    target.append(item);
+  });
+}
+
+function renderDelayedTransfer(data) {
+  const target = $("#delayed-transfer"); target.replaceChildren();
+  Object.entries(data.delayed_transfer_reviews || {}).forEach(([level, metrics]) => {
+    const item = node("article", "evidence-item");
+    item.append(
+      node("strong", "", labels[level] || level),
+      node("span", "evidence-rate", percentage(data.derived_metrics.delayed_transfer_retention_rates[level])),
+      node("small", "", `복습 ${metrics.attempt_count} · 예정 ${metrics.scheduled_count} · 기한 도래 ${metrics.due_count}`),
+    );
+    target.append(item);
+  });
+}
+
+function renderCalibration(data) {
+  renderMetrics("#calibration", data.metacognitive_calibration || {});
+  $("#calibration-rate").textContent = percentage(data.derived_metrics.metacognitive_calibration_rate);
+}
+
 function renderTopics(topics) {
   const target = $("#topics"); target.replaceChildren();
   if (!topics.length) { target.append(node("div", "empty-learning", "아직 학습한 주제가 없습니다.")); return; }
   const head = node("div", "table-row table-head");
-  ["주제", "세션", "답변", "오개념 판정"].forEach(value => head.append(node("span", "", value))); target.append(head);
+  ["주제", "숙달 상태", "세션", "답변", "반복 오개념"].forEach(value => head.append(node("span", "", value))); target.append(head);
   topics.forEach(topic => {
     const row = node("div", "table-row");
-    row.append(node("strong", "", topic.topic), node("span", "", String(topic.session_count)), node("span", "", String(topic.attempt_count)), node("span", "", String(topic.misconception_labels)));
+    const recurring = topic.recurring_misconceptions || [];
+    const recurringText = recurring.length
+      ? recurring.slice(0, 2).map(item => `${item.misconception} (${item.occurrence_count})`).join(" · ")
+      : "없음";
+    row.append(
+      node("strong", "", topic.topic),
+      node("span", `mastery-chip ${topic.mastery.stage}`, labels[topic.mastery.stage] || topic.mastery.stage),
+      node("span", "", String(topic.session_count)),
+      node("span", "", String(topic.attempt_count)),
+      node("span", "recurring-misconception", recurringText),
+    );
     target.append(row);
   });
 }
@@ -69,7 +118,7 @@ async function load() {
     if (response.status === 401) { location.href = "/login"; return; }
     if (!response.ok) throw new Error((await response.json()).detail || "학습 현황을 불러오지 못했습니다.");
     const data = await response.json();
-    renderSummary(data); renderMetrics("#assessments", data.client_llm_assessments); renderMetrics("#candidates", data.knowledge_candidates); renderTopics(data.topics); renderSessions(data.recent_sessions);
+    renderSummary(data); renderMetrics("#assessments", data.client_llm_assessments); renderMetrics("#candidates", data.knowledge_candidates); renderEvidence(data); renderDelayedTransfer(data); renderCalibration(data); renderTopics(data.topics); renderSessions(data.recent_sessions);
     $("#metric-notice").textContent = data.metric_contract.notice;
   } catch (error) { $("#message").textContent = error.message; }
 }

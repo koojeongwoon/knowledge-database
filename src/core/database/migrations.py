@@ -468,6 +468,73 @@ def _create_learning_reviews(cur) -> None:
     """)
 
 
+def _add_learning_transfer_evidence(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_learning_questions
+            ADD COLUMN IF NOT EXISTS learning_dimension VARCHAR(20) NOT NULL DEFAULT 'retrieval',
+            ADD COLUMN IF NOT EXISTS transfer_level VARCHAR(20) NOT NULL DEFAULT 'none';
+        ALTER TABLE knowledge_learning_attempts
+            ADD COLUMN IF NOT EXISTS learning_dimension VARCHAR(20) NOT NULL DEFAULT 'retrieval',
+            ADD COLUMN IF NOT EXISTS transfer_level VARCHAR(20) NOT NULL DEFAULT 'none',
+            ADD COLUMN IF NOT EXISTS support_level VARCHAR(20) NOT NULL DEFAULT 'none',
+            ADD COLUMN IF NOT EXISTS independent_success BOOLEAN NOT NULL DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS calibration_signal VARCHAR(30) NOT NULL DEFAULT 'insufficient_evidence';
+        ALTER TABLE knowledge_learning_reviews
+            ADD COLUMN IF NOT EXISTS learning_dimension VARCHAR(20) NOT NULL DEFAULT 'transfer',
+            ADD COLUMN IF NOT EXISTS transfer_level VARCHAR(20) NOT NULL DEFAULT 'near';
+        ALTER TABLE knowledge_learning_review_attempts
+            ADD COLUMN IF NOT EXISTS learning_dimension VARCHAR(20) NOT NULL DEFAULT 'transfer',
+            ADD COLUMN IF NOT EXISTS transfer_level VARCHAR(20) NOT NULL DEFAULT 'near',
+            ADD COLUMN IF NOT EXISTS support_level VARCHAR(20) NOT NULL DEFAULT 'none',
+            ADD COLUMN IF NOT EXISTS independent_success BOOLEAN NOT NULL DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS calibration_signal VARCHAR(30) NOT NULL DEFAULT 'insufficient_evidence';
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_learning_questions
+            DROP CONSTRAINT IF EXISTS ck_learning_question_dimension,
+            DROP CONSTRAINT IF EXISTS ck_learning_question_transfer_level,
+            ADD CONSTRAINT ck_learning_question_dimension
+                CHECK (learning_dimension IN ('retrieval', 'comprehension', 'transfer')),
+            ADD CONSTRAINT ck_learning_question_transfer_level
+                CHECK (transfer_level IN ('none', 'near', 'far'));
+        ALTER TABLE knowledge_learning_attempts
+            DROP CONSTRAINT IF EXISTS ck_learning_attempt_dimension,
+            DROP CONSTRAINT IF EXISTS ck_learning_attempt_transfer_level,
+            DROP CONSTRAINT IF EXISTS ck_learning_attempt_support_level,
+            DROP CONSTRAINT IF EXISTS ck_learning_attempt_calibration_signal,
+            ADD CONSTRAINT ck_learning_attempt_dimension
+                CHECK (learning_dimension IN ('retrieval', 'comprehension', 'transfer')),
+            ADD CONSTRAINT ck_learning_attempt_transfer_level
+                CHECK (transfer_level IN ('none', 'near', 'far')),
+            ADD CONSTRAINT ck_learning_attempt_support_level
+                CHECK (support_level IN ('none', 'light', 'substantial')),
+            ADD CONSTRAINT ck_learning_attempt_calibration_signal
+                CHECK (calibration_signal IN ('aligned', 'overconfident', 'underconfident', 'insufficient_evidence'));
+        ALTER TABLE knowledge_learning_reviews
+            DROP CONSTRAINT IF EXISTS ck_learning_review_dimension,
+            DROP CONSTRAINT IF EXISTS ck_learning_review_transfer_level,
+            ADD CONSTRAINT ck_learning_review_dimension CHECK (learning_dimension = 'transfer'),
+            ADD CONSTRAINT ck_learning_review_transfer_level CHECK (transfer_level IN ('near', 'far'));
+        ALTER TABLE knowledge_learning_review_attempts
+            DROP CONSTRAINT IF EXISTS ck_learning_review_attempt_dimension,
+            DROP CONSTRAINT IF EXISTS ck_learning_review_attempt_transfer_level,
+            DROP CONSTRAINT IF EXISTS ck_learning_review_attempt_support_level,
+            DROP CONSTRAINT IF EXISTS ck_learning_review_attempt_calibration_signal,
+            ADD CONSTRAINT ck_learning_review_attempt_dimension CHECK (learning_dimension = 'transfer'),
+            ADD CONSTRAINT ck_learning_review_attempt_transfer_level CHECK (transfer_level IN ('near', 'far')),
+            ADD CONSTRAINT ck_learning_review_attempt_support_level
+                CHECK (support_level IN ('none', 'light', 'substantial')),
+            ADD CONSTRAINT ck_learning_review_attempt_calibration_signal
+                CHECK (calibration_signal IN ('aligned', 'overconfident', 'underconfident', 'insufficient_evidence'));
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_learning_attempts_evidence_idx
+        ON knowledge_learning_attempts (
+            owner_id, learning_dimension, transfer_level, independent_success, created_at DESC
+        );
+    """)
+
+
 def _create_learning_knowledge_candidates(cur) -> None:
     cur.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_learning_knowledge_candidates (
@@ -857,6 +924,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(16, "extend_ontology_relation_lifecycle", _extend_ontology_relation_lifecycle),
     Migration(17, "extend_ontology_search_feedback", _extend_ontology_search_feedback),
     Migration(18, "create_knowledge_baselines", _create_knowledge_baselines),
+    Migration(19, "add_learning_transfer_evidence", _add_learning_transfer_evidence),
 )
 
 

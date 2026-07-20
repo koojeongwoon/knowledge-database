@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: mcp-app
-          image: docker.io/library/mcp-wiki-server:ontology-feedback-20260718-1113
+          image: docker.io/library/mcp-wiki-server:learning-transfer-20260720-1323
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

@@ -14,10 +14,22 @@
 .metric-track{height:9px;background:#edf1ee;border-radius:99px;overflow:hidden}
 .metric-fill{height:100%;background:var(--accent);border-radius:inherit}
 .metric-value{text-align:right;font-variant-numeric:tabular-nums}
+.evidence-grid{margin-top:18px}
+.evidence-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:18px}
+.evidence-item{display:grid;gap:6px;padding:15px;border:1px solid var(--line);border-radius:13px;background:#fbfcfb}
+.evidence-item strong{font-size:13px}
+.evidence-rate{font-family:Georgia,"Times New Roman",serif;font-size:27px;color:var(--accent)}
+.evidence-item small{color:var(--muted);line-height:1.45}
+.calibration-summary{display:flex;align-items:baseline;gap:10px;margin-top:18px}
+.calibration-summary strong{font-family:Georgia,"Times New Roman",serif;font-size:34px;color:var(--accent)}
+.calibration-summary span{color:var(--muted);font-size:12px;font-weight:750}
 .data-table{margin-top:18px;overflow-x:auto}
-.table-row{display:grid;grid-template-columns:minmax(180px,2fr) repeat(3,minmax(90px,1fr));gap:14px;padding:14px 4px;border-bottom:1px solid var(--line);align-items:center}
+.table-row{display:grid;grid-template-columns:minmax(160px,1.5fr) 100px 70px 70px minmax(220px,2fr);gap:14px;padding:14px 4px;border-bottom:1px solid var(--line);align-items:center}
 .table-row.table-head{color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}
 .table-row strong{overflow-wrap:anywhere}
+.mastery-chip{width:max-content;padding:5px 8px;border-radius:999px;background:#eef0f2;color:#59636a;font-size:11px;font-weight:800}
+.mastery-chip.acquiring{background:#fff7df;color:#725915}.mastery-chip.transfer_ready{background:#edf4ef;color:var(--accent)}.mastery-chip.retained{background:var(--ink);color:#fff}
+.recurring-misconception{color:var(--muted);font-size:12px;line-height:1.45;overflow-wrap:anywhere}
 .session-list{display:grid;gap:12px;margin-top:18px}
 .session-item{display:grid;grid-template-columns:1fr auto;gap:16px;padding:16px;border:1px solid var(--line);border-radius:13px}
 .session-meta{display:flex;gap:9px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:7px}
@@ -25,5 +37,5 @@
 .status-chip.completed{background:#eef0f2;color:#59636a}
 .metric-notice{display:flex;gap:12px;margin-top:18px;padding:16px 18px;border-radius:13px;background:#fff7df;color:#725915;font-size:13px}
 .empty-learning{padding:24px 4px;color:var(--muted)}
-@media(max-width:800px){.learning-summary{grid-template-columns:repeat(2,1fr)}.learning-grid{grid-template-columns:1fr}.learning-header{display:block}.header-actions{margin-top:18px;margin-left:0}.table-row{grid-template-columns:minmax(150px,2fr) repeat(3,90px)}}
-@media(max-width:520px){.learning-summary{grid-template-columns:1fr}.metric-row{grid-template-columns:105px 1fr 34px}.metric-notice{display:block}.metric-notice strong{display:block;margin-bottom:6px}}
+@media(max-width:800px){.learning-summary{grid-template-columns:repeat(2,1fr)}.learning-grid{grid-template-columns:1fr}.learning-header{display:block}.header-actions{margin-top:18px;margin-left:0}.table-row{grid-template-columns:150px 100px 70px 70px minmax(220px,2fr)}}
+@media(max-width:520px){.learning-summary{grid-template-columns:1fr}.metric-row{grid-template-columns:105px 1fr 34px}.evidence-list{grid-template-columns:1fr}.metric-notice{display:block}.metric-notice strong{display:block;margin-bottom:6px}}

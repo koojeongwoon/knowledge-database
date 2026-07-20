@@ -24,6 +24,7 @@ from src.api.agent_tool import (
     list_wiki_due_learning_reviews,
     record_wiki_learning_review,
     prepare_wiki_learning_knowledge_candidates,
+    prepare_wiki_learning_completion,
     stage_wiki_learning_knowledge_candidates,
     review_wiki_learning_knowledge_candidate,
     commit_wiki_learning_knowledge_candidate,
@@ -58,14 +59,21 @@ mcp = FastMCP(
        사용자 확인 후 'create_inbox_markdown'을 호출하십시오. 링크는 URL만 등록하지 말고 source_kind='external_link'와
        original_url을 포함한 Markdown 파생본으로 저장하십시오. 원문을 읽지 못했다면 저장 성공을 주장하지 마십시오.
     5. 사용자가 별도 범위를 지정하지 않고 학습하자고 하면 scope='combined'로 'prepare_learning_session'을 호출하십시오.
-       반환된 first_question 하나만 먼저 제시하고, 사용자가 답하기 전에는 근거와 정답 내용을 노출하지 마십시오.
+       due_review_summary.count가 1 이상이면 새 학습 전에 복습 항목이 있음을 알리고 우선 진행 여부를 물으십시오.
+       새 학습을 진행하면 first_question 하나만 먼저 제시하고, 사용자가 답하기 전에는 근거와 정답 내용을 노출하지 마십시오.
     6. 사용자의 답변 의미 평가는 현재 대화의 클라이언트 LLM이 근거에 기반해 수행합니다. 판정 뒤
        'plan_learning_feedback'을 호출해 힌트, 재답변, 다음 문제와 복습 우선순위를 정규화하십시오.
+       단순 재현, 원리 이해, 새 상황 적용을 learning_dimension으로 구분하고 transfer에는 near/far와
+       실제 사용한 support_level을 기록하십시오. 힌트가 있었다면 독립 숙달로 취급하지 마십시오.
+       metacognitive_calibration이 overconfident이면 정답을 바로 넘기기 전에 확신의 근거와 놓친 단서를 비교하게 하십시오.
     7. 사용자가 학습을 이어서 하거나 기록하기를 원하면 준비된 학습 팩으로 'start_learning_session'을 호출하십시오.
        각 답변과 클라이언트 판정은 'record_learning_attempt'에 저장하고, 다른 대화에서는
-       'resume_learning_session'으로 이어가며 종료 시 'complete_learning_session'을 호출하십시오.
+       'resume_learning_session'으로 이어가십시오. 종료 전 'prepare_learning_completion'으로 독립 인출·이해·near/far
+       전이 증거를 확인하고, 부족하면 반환된 next_question_contract에 맞는 변형 문제를 출제하십시오.
+       ready_to_complete=true인 경우에만 'complete_learning_session'을 호출하십시오.
     8. 사용자가 복습하자고 하면 'list_due_learning_reviews'로 기한이 된 항목을 조회해 한 문제씩 제시하십시오.
-       답변은 현재 대화의 클라이언트 LLM이 판정하고 'plan_learning_feedback'으로 정규화한 뒤
+       원 prompt를 그대로 묻지 말고 question_contract에 따라 지연 전이 문제를 만드십시오. 답변은 현재 대화의
+       클라이언트 LLM이 판정하고 transfer 차원과 contract의 near/far 수준으로 'plan_learning_feedback'을 정규화한 뒤
        'record_learning_review'에 저장해 다음 복습일을 조정하십시오.
     9. 학습 결과를 Knowledge로 만들 때는 'prepare_learning_knowledge_candidates'의 기록을 바탕으로 후보 초안을 만들고
        'stage_learning_knowledge_candidates'에 저장하십시오. 후보를 사용자에게 하나씩 보여준 뒤 명시적인 선택에만
@@ -183,6 +191,9 @@ def plan_learning_feedback(
     evidence_refs: Optional[List[str]] = None,
     hint: Optional[str] = None,
     next_question: Optional[str] = None,
+    learning_dimension: str = "retrieval",
+    transfer_level: str = "none",
+    support_level: str = "none",
 ) -> str:
     """클라이언트 LLM의 학습 판정을 검증하고 피드백·재질문·복습 계획으로 정규화합니다."""
     return cast(str, plan_wiki_learning_feedback(
@@ -193,6 +204,9 @@ def plan_learning_feedback(
         evidence_refs=evidence_refs,
         hint=hint,
         next_question=next_question,
+        learning_dimension=learning_dimension,
+        transfer_level=transfer_level,
+        support_level=support_level,
     ))
 
 
@@ -231,6 +245,7 @@ def record_learning_attempt(
     next_question_type: str = "retrieval",
     next_evidence_refs: Optional[List[str]] = None,
     client_request_id: Optional[str] = None,
+    next_transfer_level: str = "none",
 ) -> str:
     """사용자 답변과 클라이언트 LLM 판정, 피드백 계획 및 선택적 다음 질문을 저장합니다."""
     return cast(str, record_wiki_learning_attempt(
@@ -240,6 +255,7 @@ def record_learning_attempt(
         evidence_refs=evidence_refs, next_question=next_question,
         next_question_type=next_question_type, next_evidence_refs=next_evidence_refs,
         client_request_id=client_request_id,
+        next_transfer_level=next_transfer_level,
     ))
 
 
@@ -249,9 +265,15 @@ def resume_learning_session(session_id: Optional[str] = None) -> str:
     return cast(str, resume_wiki_learning_session(session_id=session_id))
 
 
+@mcp.tool(name="prepare_learning_completion")
+def prepare_learning_completion(session_id: str) -> str:
+    """독립 인출·이해·근거리 및 원거리 전이 증거를 집계하고 다음 변형 문제 계약을 반환합니다."""
+    return cast(str, prepare_wiki_learning_completion(session_id=session_id))
+
+
 @mcp.tool(name="complete_learning_session")
 def complete_learning_session(session_id: str, summary: Optional[str] = None) -> str:
-    """활성 학습 세션을 완료 처리하고 저장된 질문·답변 수를 반환합니다."""
+    """필수 이해·전이 증거가 갖춰진 활성 학습 세션을 완료합니다."""
     return cast(str, complete_wiki_learning_session(session_id=session_id, summary=summary))
 
 

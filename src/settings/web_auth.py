@@ -57,11 +57,36 @@ def create_auth_router(
         return response
 
     @router.post("/logout", include_in_schema=False)
-    def logout(knowledge_session: Optional[str] = Cookie(default=None)):
+    async def logout(knowledge_session: Optional[str] = Cookie(default=None)):
+        logout_url = "/logged-out"
+        remotely_revoked = False
         if knowledge_session:
-            session_store_factory().revoke(knowledge_session)
-        response = JSONResponse({"success": True})
+            store = session_store_factory()
+            try:
+                logout_url, remotely_revoked = await store.logout(knowledge_session)
+                if not remotely_revoked:
+                    logger.warning("OAuth token revocation failed during logout")
+            except OAuthSessionError as exc:
+                logger.warning("OAuth logout failed: error_type=%s", type(exc).__name__)
+                store.revoke(knowledge_session)
+        response = JSONResponse({
+            "success": True,
+            "remotely_revoked": remotely_revoked,
+            "logout_url": logout_url,
+        })
         response.delete_cookie(session_cookie, path="/")
         return response
+
+    @router.get("/logged-out", include_in_schema=False)
+    def logged_out():
+        return HTMLResponse(
+            "<!doctype html><html lang='ko'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>로그아웃 완료</title><body><main>"
+            "<h1>로그아웃되었습니다.</h1>"
+            "<p>Knowledge와 통합 인증 세션을 종료했습니다.</p>"
+            "<a href='/login'>다시 로그인</a>"
+            "</main></body></html>"
+        )
 
     return router

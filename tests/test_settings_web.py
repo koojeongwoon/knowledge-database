@@ -17,6 +17,10 @@ class SettingsWebTests(unittest.TestCase):
         self.store.oauth_client.authorization_url.return_value = "https://auth.snappytory.com/oauth2/authorize?state=state-value"
         self.store.resolve = AsyncMock()
         self.store.oauth_client.exchange_code = AsyncMock(return_value={"access_token": "access", "refresh_token": "refresh"})
+        self.store.logout = AsyncMock(return_value=(
+            "https://auth.snappytory.com/connect/logout?id_token_hint=id-token",
+            True,
+        ))
         self.store.create.return_value = "opaque-session-id"
         self.store_patcher = patch("src.settings.web.session_store", return_value=self.store)
         self.store_patcher.start()
@@ -222,7 +226,23 @@ class SettingsWebTests(unittest.TestCase):
         self.authenticate()
         response = self.client.post("/logout")
         self.assertEqual(response.status_code, 200)
-        self.store.revoke.assert_called_once_with("opaque-session")
+        self.store.logout.assert_awaited_once_with("opaque-session")
+        self.assertTrue(response.json()["remotely_revoked"])
+        self.assertIn("/connect/logout", response.json()["logout_url"])
+        self.assertIn("knowledge_session=", response.headers["set-cookie"])
+
+    def test_logged_out_page_does_not_start_a_new_login(self):
+        response = self.client.get("/logged-out")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("로그아웃되었습니다", response.text)
+        self.store.begin_login.assert_not_called()
+
+    def test_logout_buttons_follow_authorization_server_logout_url(self):
+        for asset_name in ("dashboard.js", "documents.js", "inbox.js", "settings.js"):
+            asset = self.client.get(f"/settings/assets/{asset_name}")
+            self.assertEqual(asset.status_code, 200)
+            self.assertIn("result.logout_url", asset.text)
+            self.assertNotIn('location.replace("/login")});', asset.text)
 
     def test_settings_api_requires_authorization(self):
         response = self.client.get("/api/settings")

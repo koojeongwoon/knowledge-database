@@ -18,8 +18,13 @@
     <article class="card"><div class="section-heading"><div><span>01</span><h2>튜터 판정</h2></div></div><p class="hint">클라이언트 LLM이 제출한 흐름 제어용 판정입니다.</p><div id="assessments" class="metric-list"></div></article>
     <article class="card"><div class="section-heading"><div><span>02</span><h2>지식화 결정</h2></div></div><p class="hint">사용자가 후보별로 명시적으로 승인하거나 거절한 결과입니다.</p><div id="candidates" class="metric-list"></div></article>
   </section>
-  <section class="card"><div class="section-heading"><div><span>03</span><h2>주제별 활동</h2></div></div><div id="topics" class="data-table"></div></section>
-  <section class="card"><div class="section-heading"><div><span>04</span><h2>최근 학습 세션</h2></div></div><div id="sessions" class="session-list"></div></section>
+  <section class="learning-grid evidence-grid">
+    <article class="card"><div class="section-heading"><div><span>03</span><h2>독립 학습 증거</h2></div></div><p class="hint">힌트 없이 성공한 인출·이해·전이 비율입니다.</p><div id="learning-evidence" class="evidence-list"></div></article>
+    <article class="card"><div class="section-heading"><div><span>04</span><h2>지연 전이 복습</h2></div></div><p class="hint">near 성공 후 far 전이로 승격된 복습 흐름입니다.</p><div id="delayed-transfer" class="evidence-list"></div></article>
+  </section>
+  <section class="card"><div class="section-heading"><div><span>05</span><h2>메타인지 보정</h2></div></div><p class="hint">답변 전 확신과 무힌트 실제 성과가 얼마나 일치했는지 보여줍니다.</p><div class="calibration-summary"><strong id="calibration-rate">측정 전</strong><span>보정 일치율</span></div><div id="calibration" class="metric-list"></div></section>
+  <section class="card"><div class="section-heading"><div><span>06</span><h2>주제별 활동</h2></div></div><div id="topics" class="data-table"></div></section>
+  <section class="card"><div class="section-heading"><div><span>07</span><h2>최근 학습 세션</h2></div></div><div id="sessions" class="session-list"></div></section>
   <aside class="metric-notice"><strong>지표 해석 원칙</strong><span id="metric-notice">LLM 판정과 사용자 행동을 불러오는 중입니다.</span></aside>
 </main>
 <script src="/settings/assets/learning.js" defer></script>

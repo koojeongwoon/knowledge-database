@@ -36,6 +36,7 @@ class TokenSet:
     access_token_expires_at: int
     absolute_expires_at: int
     auth_id: str
+    id_token: str = ""
 
 
 class OAuthClient:
@@ -46,10 +47,20 @@ class OAuthClient:
             "AUTHORIZATION_ENDPOINT", f"{AUTH_SERVER_URL}/oauth2/authorize"
         )
         self.token_endpoint = os.getenv("TOKEN_ENDPOINT", f"{AUTH_SERVER_URL}/oauth2/token")
+        self.revocation_endpoint = os.getenv(
+            "TOKEN_REVOCATION_ENDPOINT", f"{AUTH_SERVER_URL}/oauth2/revoke"
+        )
+        self.end_session_endpoint = os.getenv(
+            "OIDC_END_SESSION_ENDPOINT", f"{AUTH_SERVER_URL}/connect/logout"
+        )
         self.redirect_uri = os.getenv(
             "KNOWLEDGE_REDIRECT_URI", "https://knowledge.lynply.com/callback"
         )
         self.scope = os.getenv("KNOWLEDGE_OAUTH_SCOPE", "openid profile email")
+        self.post_logout_redirect_uri = os.getenv(
+            "KNOWLEDGE_POST_LOGOUT_REDIRECT_URI",
+            "https://knowledge.lynply.com/logged-out",
+        )
         self.timeout = float(os.getenv("AUTH_HTTP_TIMEOUT_SECONDS", "10"))
 
     def authorization_url(self, state: str, code_challenge: str) -> str:
@@ -77,6 +88,28 @@ class OAuthClient:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
         })
+
+    async def revoke(self, token: str, token_type_hint: str = "refresh_token") -> None:
+        if not self.client_secret:
+            raise OAuthSessionUnavailable("KNOWLEDGE_CLIENT_SECRET가 설정되지 않았습니다.")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    self.revocation_endpoint,
+                    data={"token": token, "token_type_hint": token_type_hint},
+                    auth=(self.client_id, self.client_secret),
+                    headers={"Accept": "application/json"},
+                )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise OAuthSessionUnavailable("인증서버 토큰 폐기에 실패했습니다.") from exc
+
+    def logout_url(self, id_token: str) -> str:
+        query = urlencode({
+            "id_token_hint": id_token,
+            "post_logout_redirect_uri": self.post_logout_redirect_uri,
+        })
+        return f"{self.end_session_endpoint}?{query}"
 
     async def _token_request(self, data: dict) -> dict:
         if not self.client_secret:
@@ -182,7 +215,11 @@ class ServerSessionStore:
             raise OAuthSessionUnavailable("세션 갱신이 진행 중입니다. 잠시 후 다시 시도해 주세요.")
         try:
             payload = await self.oauth_client.refresh(current.refresh_token)
-            refreshed = self._validated_token_set(payload, absolute_expires_at=current.absolute_expires_at)
+            refreshed = self._validated_token_set(
+                payload,
+                absolute_expires_at=current.absolute_expires_at,
+                id_token=current.id_token,
+            )
             ttl = max(1, refreshed.absolute_expires_at - int(time.time()))
             if not self.cache.set(
                 self.SESSION_PREFIX + self._hash(session_id),
@@ -214,6 +251,24 @@ class ServerSessionStore:
     def revoke(self, session_id: str) -> None:
         self.cache.delete(self.SESSION_PREFIX + self._hash(session_id))
 
+    async def logout(self, session_id: str) -> tuple[str, bool]:
+        token_set = self._load(session_id)
+        remotely_revoked = False
+        try:
+            if not token_set.id_token:
+                payload = await self.oauth_client.refresh(token_set.refresh_token)
+                token_set = self._validated_token_set(
+                    payload,
+                    absolute_expires_at=token_set.absolute_expires_at,
+                )
+            await self.oauth_client.revoke(token_set.refresh_token)
+            remotely_revoked = True
+        except OAuthSessionError:
+            pass
+        finally:
+            self.revoke(session_id)
+        return self.oauth_client.logout_url(token_set.id_token), remotely_revoked
+
     def _load(self, session_id: str) -> TokenSet:
         encrypted = self.cache.get(self.SESSION_PREFIX + self._hash(session_id))
         if not encrypted:
@@ -223,7 +278,12 @@ class ServerSessionStore:
         except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
             raise OAuthSessionExpired("로그인 세션을 읽을 수 없습니다.") from exc
 
-    def _validated_token_set(self, payload: dict, absolute_expires_at: Optional[int] = None) -> TokenSet:
+    def _validated_token_set(
+        self,
+        payload: dict,
+        absolute_expires_at: Optional[int] = None,
+        id_token: str = "",
+    ) -> TokenSet:
         try:
             claims = verify_auth_token(payload["access_token"])
             expires_at = int(claims["exp"])
@@ -237,6 +297,7 @@ class ServerSessionStore:
             access_token_expires_at=expires_at,
             absolute_expires_at=absolute_expires_at or now + self.session_ttl,
             auth_id=claims["sub"],
+            id_token=payload.get("id_token") or id_token,
         )
 
     @staticmethod

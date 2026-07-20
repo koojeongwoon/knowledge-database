@@ -1,8 +1,10 @@
 from typing import Any, Dict, List, Optional
 
 from src.learning.domain.feedback import VALID_ASSESSMENTS, VALID_CONFIDENCE
+from src.learning.domain.completion import LearningCompletionPolicy
+from src.learning.domain.calibration import calibration_signal
 from src.learning.domain.ports import LearningSessionRepositoryPort, UuidFactory
-from src.learning.domain.review import VALID_REVIEW_PRIORITIES
+from src.learning.domain.review import VALID_REVIEW_PRIORITIES, delayed_transfer_question_contract
 from src.learning.domain.session import (
     VALID_CANDIDATE_TYPES, LearningSessionPlanner, create_uuid, normalized_uuid, text,
 )
@@ -33,24 +35,48 @@ class LearningSessionService:
         next_question_type: str = "retrieval",
         next_evidence_refs: Optional[List[str]] = None,
         client_request_id: Optional[str] = None,
+        next_transfer_level: str = "none",
     ) -> Dict[str, Any]:
         plan = self.planner.attempt(session_id, question_id, answer, assessment, confidence, feedback_plan,
                                     missing_concepts, misconceptions, evidence_refs, next_question,
-                                    next_question_type, next_evidence_refs, client_request_id)
+                                    next_question_type, next_evidence_refs, client_request_id, next_transfer_level)
         return self.repository.record_attempt(owner_id, plan.attempt, plan.next_question)
 
     def resume(self, owner_id: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         return self.repository.resume(owner_id, normalized_uuid(session_id, "session_id") if session_id else None)
 
     def complete(self, owner_id: str, session_id: str, summary: Optional[str] = None) -> Dict[str, Any]:
-        return self.repository.complete(
-            owner_id, normalized_uuid(session_id, "session_id"), text(summary, "summary", 4000, False),
+        normalized_session_id = normalized_uuid(session_id, "session_id")
+        readiness = self.prepare_completion(owner_id, normalized_session_id)
+        if readiness["completion_gate_enabled"] and not readiness["ready_to_complete"]:
+            return {
+                "session_id": normalized_session_id, "status": "active", "completed": False,
+                "completion_readiness": readiness,
+            }
+        result = self.repository.complete(
+            owner_id, normalized_session_id, text(summary, "summary", 4000, False),
         )
+        return {**result, "completed": result.get("status") == "completed", "completion_readiness": readiness}
+
+    def prepare_completion(self, owner_id: str, session_id: str) -> Dict[str, Any]:
+        normalized_session_id = normalized_uuid(session_id, "session_id")
+        stored = self.repository.completion_evidence(owner_id, normalized_session_id)
+        snapshot = stored["session"].get("plan_snapshot") or {}
+        schema_version = int(snapshot.get("schema_version") or 1)
+        readiness = LearningCompletionPolicy.evaluate(stored["evidence_rows"])
+        return {
+            "session_id": normalized_session_id,
+            "status": stored["session"].get("status"),
+            "completion_gate_enabled": schema_version >= 2,
+            **readiness,
+        }
 
     def list_due_reviews(self, owner_id: str, limit: int = 20) -> Dict[str, Any]:
         if limit < 1 or limit > 100:
             raise ValueError("limit은 1 이상 100 이하여야 합니다.")
         reviews = self.repository.list_due_reviews(owner_id, limit)
+        for review in reviews:
+            review["question_contract"] = delayed_transfer_question_contract(review)
         return {"reviews": reviews, "count": len(reviews)}
 
     def record_review(
@@ -64,6 +90,16 @@ class LearningSessionService:
             raise ValueError("올바르지 않은 복습 판정 또는 확신도입니다.")
         if not isinstance(feedback_plan, dict):
             raise ValueError("feedback_plan은 객체여야 합니다.")
+        evidence = feedback_plan.get("learning_evidence") or {}
+        if not isinstance(evidence, dict):
+            raise ValueError("feedback_plan.learning_evidence는 객체여야 합니다.")
+        dimension = str(evidence.get("dimension") or "").lower()
+        transfer_level = str(evidence.get("transfer_level") or "").lower()
+        support_level = str(evidence.get("support_level") or "none").lower()
+        if dimension != "transfer" or transfer_level not in {"near", "far"}:
+            raise ValueError("복습은 near 또는 far transfer 학습 증거로 기록해야 합니다.")
+        if support_level not in {"none", "light", "substantial"}:
+            raise ValueError("올바르지 않은 복습 지원 수준입니다.")
         priority = str(feedback_plan.get("review_priority") or "medium").lower()
         if priority not in VALID_REVIEW_PRIORITIES:
             raise ValueError("올바르지 않은 복습 우선순위입니다.")
@@ -73,6 +109,13 @@ class LearningSessionService:
             "assessment": normalized_assessment,
             "confidence": normalized_confidence,
             "feedback_plan": feedback_plan,
+            "learning_dimension": dimension,
+            "transfer_level": transfer_level,
+            "support_level": support_level,
+            "independent_success": normalized_assessment == "mastered" and support_level == "none",
+            "calibration_signal": calibration_signal(
+                normalized_assessment, normalized_confidence, support_level,
+            ),
             "review_priority": priority,
             "client_request_id": text(client_request_id, "client_request_id", 100, False),
         })
