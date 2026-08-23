@@ -39,3 +39,11 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/knowledge:latest
             ghcr.io/${{ github.repository_owner }}/knowledge:${{ github.sha }}
+
+      - name: Cleanup old knowledge image versions (Keep latest 3)
+        uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: 'knowledge'
+          package-type: 'container'
+          min-versions-to-keep: 3
