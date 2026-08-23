@@ -207,10 +207,9 @@ class SettingsWebTests(unittest.TestCase):
         response = self.client.get("/search-feedback")
         self.assertEqual(response.status_code, 200)
         self.assertIn("LLM-Wiki 검색 평가", response.text)
-        self.assertIn("전체 만족도", (self.client.get("/settings/assets/feedback.js").text))
         feedback_js = self.client.get("/settings/assets/feedback.js").text
-        self.assertIn("매우 도움", feedback_js)
-        self.assertIn("더 최신 문서가 있음", feedback_js)
+        self.assertIn("전체 만족", feedback_js)
+        self.assertIn("오래됨", feedback_js)
         self.assertIn("relation_helpful", feedback_js)
 
     def test_search_graph_page_loads_bundled_visualization(self):
