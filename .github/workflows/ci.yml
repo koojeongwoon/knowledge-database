@@ -11,13 +11,10 @@ permissions:
 
 jobs:
   build-knowledge:
-    name: Build Knowledge MCP Server
+    name: Build Knowledge MCP Server (ARM64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -29,16 +26,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Image
+      - name: Build and Push Image (linux/arm64)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/knowledge:latest
             ghcr.io/${{ github.repository_owner }}/knowledge:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Cleanup old knowledge image versions (Keep latest 3)
         uses: actions/delete-package-versions@v5
