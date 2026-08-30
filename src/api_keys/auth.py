@@ -22,6 +22,10 @@ class MissingTokenSubjectError(jwt.InvalidTokenError):
     pass
 
 
+class MissingTokenEmailError(jwt.InvalidTokenError):
+    pass
+
+
 @lru_cache(maxsize=1)
 def _jwk_client() -> PyJWKClient:
     return PyJWKClient(
@@ -50,4 +54,6 @@ def verify_auth_token(token: str) -> dict:
         raise KnowledgeTenantMismatchError("Token does not belong to the knowledge tenant")
     if not claims.get("sub"):
         raise MissingTokenSubjectError("Token subject is missing")
+    if not claims.get("email"):
+        raise MissingTokenEmailError("Token standard OIDC email claim is missing")
     return claims
