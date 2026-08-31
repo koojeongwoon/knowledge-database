@@ -1,2 +1,77 @@
-<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LLM-Wiki 연결 정보 등록·수정</title><link rel="stylesheet" href="/settings/assets/settings.css"><link rel="stylesheet" href="/settings/assets/dashboard.css"></head><body><main class="shell"><nav class="top-nav"><a href="/dashboard">대시보드</a><a class="active" href="/settings">연결 설정</a></nav><header><p class="eyebrow">LLM-WIKI</p><h1>등록·수정</h1><p class="intro">새 Secret을 입력한 항목만 교체합니다. 기존 Secret을 유지하려면 해당 입력란을 비워두세요.</p></header><form id="settings-form" class="card"><div class="section-heading"><div><span>01</span><h2>AI 엔진 및 임베딩</h2></div><span id="llm-state" class="badge neutral">미설정</span></div><label for="llm-auth-type">LLM 인증 방식</label><select id="llm-auth-type"><option value="api_key">OpenAI API Key (종량제)</option><option value="openai_oauth">ChatGPT Plus / Pro 구독 (OAuth)</option></select><div id="api-key-group"><label for="openai-key">OpenAI API Key</label><input id="openai-key" type="password" autocomplete="new-password" placeholder="기존 값을 유지하려면 비워두세요"></div><div id="oauth-group" style="display:none;margin-top:12px;margin-bottom:16px"><div class="card" style="background:#f8f9fa;border:1px solid #e9ecef;padding:12px 16px"><p style="margin:0 0 8px 0;font-size:0.9rem;color:#495057">ChatGPT Plus/Pro 계정으로 로그인하여 구독 쿼터로 추론합니다.</p><div style="display:flex;gap:8px;align-items:center"><button id="oauth-login-btn" type="button" class="primary compact">ChatGPT 계정 로그인</button><span id="oauth-status-text" style="font-size:0.85rem;color:#6c757d"></span></div><div id="oauth-device-guide" style="display:none;margin-top:12px;padding:10px;background:#fff;border:1px solid #ced4da;border-radius:4px"><p style="margin:0 0 6px 0;font-size:0.85rem">아래 링크를 열고 코드를 입력하여 승인하세요:</p><p style="margin:0 0 6px 0"><a id="oauth-uri-link" href="#" target="_blank" style="font-weight:bold;color:#0d6efd">인증 링크 열기</a> | 코드: <strong id="oauth-user-code" style="font-size:1.1rem;letter-spacing:1px;color:#d63384"></strong></p><p id="oauth-poll-message" style="margin:0;font-size:0.8rem;color:#6c757d">브라우저에서 승인을 대기 중입니다…</p></div></div></div><label for="embedding-key">임베딩 전용 OpenAI API Key (선택)</label><input id="embedding-key" type="password" autocomplete="new-password" placeholder="비워둘 시 위의 OpenAI API Key를 사용합니다"><div class="divider"></div><div class="section-heading"><div><span>02</span><h2>지식 저장소</h2></div><span id="storage-state" class="badge neutral">미설정</span></div><label for="storage-type">저장소 유형</label><select id="storage-type"><option value="s3">S3 호환 저장소</option><option value="r2">Cloudflare R2</option></select><div id="remote-fields"><label for="endpoint-url">Endpoint URL</label><input id="endpoint-url" type="url" placeholder="https://&lt;account-id&gt;.r2.cloudflarestorage.com"><label for="bucket-name">Bucket Name</label><input id="bucket-name" type="text" placeholder="my-wiki"><div class="grid-two"><div><label for="access-key">Access Key ID</label><input id="access-key" type="password" autocomplete="new-password" placeholder="기존 값 유지 시 비움"></div><div><label for="secret-key">Secret Access Key</label><input id="secret-key" type="password" autocomplete="new-password" placeholder="기존 값 유지 시 비움"></div></div></div><div id="message" class="message" role="status" aria-live="polite"></div><div class="action-row"><a class="button-link secondary" href="/settings">취소</a><button id="save-button" class="primary compact" type="submit">저장</button></div></form></main><script src="/settings/assets/edit.js" defer></script></body></html>
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LLM-Wiki 연결 정보 등록·수정</title>
+  <link rel="stylesheet" href="/settings/assets/settings.css">
+  <link rel="stylesheet" href="/settings/assets/dashboard.css">
+  <link rel="stylesheet" href="/settings/assets/settings-view.css">
+</head>
+<body>
+  <main class="shell">
+    <nav class="top-nav"><a href="/dashboard">대시보드</a><a class="active" href="/settings">연결 설정</a></nav>
+    <header>
+      <p class="eyebrow">LLM-WIKI</p>
+      <h1>등록·수정</h1>
+      <p class="intro">새 Secret을 입력한 항목만 교체합니다. 기존 Secret을 유지하려면 해당 입력란을 비워두세요.</p>
+    </header>
+    <form id="settings-form" class="card">
+      <div class="section-heading">
+        <div><span>01</span><h2>AI 엔진 및 임베딩 설정</h2></div>
+        <span id="llm-state" class="badge neutral">미설정</span>
+      </div>
 
+      <!-- 1. OpenAI API Key (필수) -->
+      <label for="openai-key">OpenAI API Key <span style="color:#d63384;font-size:0.85rem">(필수)</span></label>
+      <p class="hint" style="margin-top:-4px;margin-bottom:8px;font-size:0.85rem;color:#6c757d">
+        지식 검색 및 인덱싱(임베딩)에 필수적으로 사용되며, 아래 ChatGPT 구독을 연동하지 않을 경우 AI 추론에도 기본 사용됩니다.
+      </p>
+      <input id="openai-key" type="password" autocomplete="new-password" placeholder="기존 값을 유지하려면 비워두세요">
+
+      <!-- 2. ChatGPT Plus / Pro 구독 연동 (선택 옵션) -->
+      <div class="card" style="background:#f8f9fa;border:1px solid #e9ecef;padding:14px 16px;margin-top:16px;margin-bottom:8px;border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <strong style="font-size:0.95rem;color:#212529">ChatGPT Plus / Pro 구독 연동 (선택)</strong>
+          <span id="oauth-badge" class="badge neutral" style="font-size:0.75rem">미연동</span>
+        </div>
+        <p style="margin:0 0 10px 0;font-size:0.85rem;color:#495057">
+          추론(LLM) 비용을 절감하려면 ChatGPT Plus/Pro 계정을 연동하세요. (연동 시 AI 추론은 구독 쿼터를 사용하며, 지식 검색/임베딩은 위의 API Key를 계속 사용합니다.)
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button id="oauth-login-btn" type="button" class="primary compact">ChatGPT 계정 로그인</button>
+          <button id="oauth-unlink-btn" type="button" class="secondary compact" style="display:none">연동 해제 (API Key 사용)</button>
+          <span id="oauth-status-text" style="font-size:0.85rem;color:#6c757d"></span>
+        </div>
+        <div id="oauth-device-guide" style="display:none;margin-top:12px;padding:10px;background:#fff;border:1px solid #ced4da;border-radius:4px">
+          <p style="margin:0 0 6px 0;font-size:0.85rem">아래 링크를 열고 코드를 입력하여 승인하세요:</p>
+          <p style="margin:0 0 6px 0">
+            <a id="oauth-uri-link" href="#" target="_blank" style="font-weight:bold;color:#0d6efd">인증 링크 열기</a> | 코드: <strong id="oauth-user-code" style="font-size:1.1rem;letter-spacing:1px;color:#d63384"></strong>
+          </p>
+          <p id="oauth-poll-message" style="margin:0;font-size:0.8rem;color:#6c757d">브라우저에서 승인을 대기 중입니다…</p>
+        </div>
+      </div>
+
+      <input id="llm-auth-type" type="hidden" value="api_key">
+
+      <div class="divider"></div>
+      <div class="section-heading"><div><span>02</span><h2>지식 저장소</h2></div><span id="storage-state" class="badge neutral">미설정</span></div>
+      <label for="storage-type">저장소 유형</label>
+      <select id="storage-type"><option value="s3">S3 호환 저장소</option><option value="r2">Cloudflare R2</option></select>
+      <div id="remote-fields">
+        <label for="endpoint-url">Endpoint URL</label>
+        <input id="endpoint-url" type="url" placeholder="https://<account-id>.r2.cloudflarestorage.com">
+        <label for="bucket-name">Bucket Name</label>
+        <input id="bucket-name" type="text" placeholder="my-wiki">
+        <div class="grid-two">
+          <div><label for="access-key">Access Key ID</label><input id="access-key" type="password" autocomplete="new-password" placeholder="기존 값 유지 시 비움"></div>
+          <div><label for="secret-key">Secret Access Key</label><input id="secret-key" type="password" autocomplete="new-password" placeholder="기존 값 유지 시 비움"></div>
+        </div>
+      </div>
+      <div id="message" class="message" role="status" aria-live="polite"></div>
+      <div class="action-row"><a class="button-link secondary" href="/settings">취소</a><button id="save-button" class="primary compact" type="submit">저장</button></div>
+    </form>
+  </main>
+  <script src="/settings/assets/edit.js" defer></script>
+</body>
+</html>
