@@ -77,7 +77,8 @@ def create_document_expander() -> BaseDocumentExpander:
 
     if not DOCUMENT_EXPANSION_ENABLED:
         return NoOpDocumentExpander()
-    api_key = (current_user_config.get() or {}).get("openai_api_key")
+    config = current_user_config.get() or {}
+    api_key = config.get("llm_bearer_token") or config.get("openai_api_key")
     if not api_key:
         return NoOpDocumentExpander()
     try:
@@ -87,3 +88,4 @@ def create_document_expander() -> BaseDocumentExpander:
     except Exception as exc:
         print(f"Warning: Failed to initialize document expansion: {exc}")
         return NoOpDocumentExpander()
+

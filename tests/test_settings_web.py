@@ -372,6 +372,60 @@ class SettingsWebTests(unittest.TestCase):
             else:
                 os.environ["MCP_PUBLIC_HOST"] = old_mcp
 
+    @patch("src.settings.web._authenticated_user", return_value="USER_1")
+    @patch("src.settings.openai_oauth.OpenAIOAuthClient.start_device_flow")
+    def test_start_openai_device_code_endpoint(self, mock_start, mock_auth):
+        self.authenticate()
+        mock_start.return_value = {
+            "device_code": "dev-code-123",
+            "user_code": "USER-1234",
+            "verification_uri": "https://auth.openai.com/activate",
+            "expires_in": 900,
+            "interval": 5,
+        }
+
+        response = self.client.post("/api/settings/openai-oauth/device-code")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["user_code"], "USER-1234")
+
+    @patch("src.settings.web._authenticated_user", return_value="USER_1")
+    @patch("src.settings.openai_oauth.OpenAIOAuthClient.check_device_token")
+    @patch("src.settings.service.UserSettingsService.save_openai_oauth_tokens")
+    def test_poll_openai_device_token_endpoint(self, mock_save, mock_check, mock_auth):
+        from src.settings.openai_oauth import OpenAITokenSet
+
+        self.authenticate()
+        # 1. Pending status
+        mock_check.return_value = None
+        pending_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123"})
+        self.assertEqual(pending_resp.status_code, 200)
+        self.assertEqual(pending_resp.json()["status"], "pending")
+
+        # 2. Complete status
+        mock_check.return_value = OpenAITokenSet(
+            access_token="acc-token",
+            refresh_token="ref-token",
+            expires_at=1700000000,
+        )
+        mock_save.return_value = {"configured": True, "llm_auth_type": "openai_oauth"}
+
+        complete_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123"})
+        self.assertEqual(complete_resp.status_code, 200)
+        self.assertEqual(complete_resp.json()["status"], "complete")
+        self.assertEqual(complete_resp.json()["settings"]["llm_auth_type"], "openai_oauth")
+
+    @patch("src.settings.web._authenticated_user", return_value="USER_1")
+    @patch("src.settings.service.UserSettingsService.switch_llm_auth_type")
+    def test_switch_auth_type_endpoint(self, mock_switch, mock_auth):
+        self.authenticate()
+        mock_switch.return_value = {"configured": True, "llm_auth_type": "openai_oauth"}
+
+        resp = self.client.post("/api/settings/switch-auth-type", json={"llm_auth_type": "openai_oauth"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["llm_auth_type"], "openai_oauth")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

@@ -905,6 +905,24 @@ def _create_knowledge_baselines(cur) -> None:
     """)
 
 
+def _add_llm_auth_and_embedding_settings(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_user_settings
+            ADD COLUMN IF NOT EXISTS llm_auth_type VARCHAR(32) NOT NULL DEFAULT 'api_key',
+            ADD COLUMN IF NOT EXISTS openai_oauth_access_token_encrypted TEXT,
+            ADD COLUMN IF NOT EXISTS openai_oauth_refresh_token_encrypted TEXT,
+            ADD COLUMN IF NOT EXISTS openai_oauth_expires_at BIGINT,
+            ADD COLUMN IF NOT EXISTS embedding_api_key_encrypted TEXT;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_user_settings
+            DROP CONSTRAINT IF EXISTS ck_user_settings_llm_auth_type;
+        ALTER TABLE knowledge_user_settings
+            ADD CONSTRAINT ck_user_settings_llm_auth_type
+                CHECK (llm_auth_type IN ('api_key', 'openai_oauth'));
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -925,6 +943,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(17, "extend_ontology_search_feedback", _extend_ontology_search_feedback),
     Migration(18, "create_knowledge_baselines", _create_knowledge_baselines),
     Migration(19, "add_learning_transfer_evidence", _add_learning_transfer_evidence),
+    Migration(20, "add_llm_auth_and_embedding_settings", _add_llm_auth_and_embedding_settings),
 )
 
 

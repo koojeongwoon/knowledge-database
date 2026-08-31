@@ -67,8 +67,9 @@ class DatabaseBackedUserConfigTests(unittest.TestCase):
 
     def test_runtime_settings_use_cache_until_invalidated(self):
         service = UserSettingsService(db_manager=unittest.mock.Mock())
-        old_row = ("encrypted-old", "s3", "endpoint", "bucket", "access", "secret", None)
-        new_row = ("encrypted-new", "s3", "endpoint", "bucket", "access", "secret", None)
+        old_row = ("encrypted-old", "s3", "endpoint", "bucket", "access", "secret", None, "api_key", None, None, None, None)
+        new_row = ("encrypted-new", "s3", "endpoint", "bucket", "access", "secret", None, "api_key", None, None, None, None)
+
 
         with patch.object(service, "_get_row", side_effect=[old_row, new_row]) as get_row, \
              patch.object(service, "_decrypt", side_effect=lambda value: value):

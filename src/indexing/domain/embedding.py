@@ -69,7 +69,7 @@ class OpenAIEmbeddingService(BaseEmbeddingService):
             try:
                 from src.core.config import current_user_config
                 config = current_user_config.get() or {}
-                api_key = config.get("openai_api_key")
+                api_key = config.get("embedding_api_key") or config.get("openai_api_key")
             except Exception:
                 pass
 
