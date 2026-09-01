@@ -38,22 +38,38 @@ class BaselineSearchRepository:
         words = [word for word in re.findall(r"\w+", query, re.UNICODE) if len(word) > 1]
         if not words:
             return []
+        search_query = " OR ".join(words)
         tsquery = " | ".join(words)
         with self.db_manager.cursor() as cur:
-            cur.execute("""
+            sql_bm25 = """
                 SELECT file_path, snapshot_path, chunk_index, doc_type, title, description,
                        tags, content, parent_content, raw_frontmatter,
-                       ts_rank(
-                           to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, '')),
-                           to_tsquery('simple', %s)
-                       ) AS rank
+                       paradedb.score(id) AS rank
                 FROM knowledge_baseline_documents
-                WHERE owner_id = %s AND release_id = %s
-                  AND to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, ''))
-                      @@ to_tsquery('simple', %s)
+                WHERE id @@@ paradedb.parse(%s)
+                  AND owner_id = %s AND release_id = %s
                 ORDER BY rank DESC
                 LIMIT %s
-            """, (tsquery, self.owner_id, self.release_id, tsquery, limit))
+            """
+            try:
+                cur.execute(sql_bm25, (search_query, self.owner_id, self.release_id, limit))
+            except Exception:
+                sql_fallback = """
+                    SELECT file_path, snapshot_path, chunk_index, doc_type, title, description,
+                           tags, content, parent_content, raw_frontmatter,
+                           ts_rank(
+                               to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, '')),
+                               to_tsquery('simple', %s)
+                           ) AS rank
+                    FROM knowledge_baseline_documents
+                    WHERE owner_id = %s AND release_id = %s
+                      AND to_tsvector('simple', coalesce(content, '') || ' ' || coalesce(title, ''))
+                          @@ to_tsquery('simple', %s)
+                    ORDER BY rank DESC
+                    LIMIT %s
+                """
+                cur.execute(sql_fallback, (tsquery, self.owner_id, self.release_id, tsquery, limit))
+
             columns = [column[0] for column in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 

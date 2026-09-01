@@ -930,6 +930,26 @@ def _add_llm_model_name_to_user_settings(cur) -> None:
     """)
 
 
+def _create_pg_search_bm25_indexes(cur) -> None:
+    cur.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE;")
+    cur.execute("""
+        CALL paradedb.create_bm25(
+            index_name => 'knowledge_documents_bm25_idx',
+            table_name => 'knowledge_documents',
+            key_field  => 'id',
+            text_fields => '{title: {}, content: {}}'
+        );
+    """)
+    cur.execute("""
+        CALL paradedb.create_bm25(
+            index_name => 'knowledge_baseline_documents_bm25_idx',
+            table_name => 'knowledge_baseline_documents',
+            key_field  => 'id',
+            text_fields => '{title: {}, content: {}}'
+        );
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -952,6 +972,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(19, "add_learning_transfer_evidence", _add_learning_transfer_evidence),
     Migration(20, "add_llm_auth_and_embedding_settings", _add_llm_auth_and_embedding_settings),
     Migration(21, "add_llm_model_name_to_user_settings", _add_llm_model_name_to_user_settings),
+    Migration(22, "create_pg_search_bm25_indexes", _create_pg_search_bm25_indexes),
 )
 
 

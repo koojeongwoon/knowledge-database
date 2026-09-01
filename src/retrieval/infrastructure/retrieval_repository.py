@@ -34,27 +34,47 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         if not words:
             return []
 
+        search_query = " OR ".join(words)
         tsquery_str = " | ".join(words)
 
         with self.db_manager.cursor() as cur:
-            sql = """
+            # BM25 전문 검색 (pg_search) 시도 후 미지원 시 기존 tsvector 폴백
+            sql_bm25 = """
             SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
                    d.content, d.parent_content, d.raw_frontmatter,
                    COALESCE(c.citation_count, 0) AS citation_count,
-                   ts_rank(
-                       to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')),
-                       to_tsquery('simple', %s)
-                   ) AS rank
+                   paradedb.score(d.id) AS rank
             FROM knowledge_documents d
             LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
-            WHERE to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')) @@ to_tsquery('simple', %s)
+            WHERE d.id @@@ paradedb.parse(%s)
                   AND d.file_path NOT LIKE 'baselines/%%'
                   AND d.file_path NOT LIKE 'baseline-drafts/%%'
                   AND ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
             ORDER BY rank DESC
             LIMIT %s;
             """
-            cur.execute(sql, (tsquery_str, tsquery_str, owner_id, limit))
+            try:
+                cur.execute(sql_bm25, (search_query, owner_id, limit))
+            except Exception:
+                sql_fallback = """
+                SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
+                       d.content, d.parent_content, d.raw_frontmatter,
+                       COALESCE(c.citation_count, 0) AS citation_count,
+                       ts_rank(
+                           to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')),
+                           to_tsquery('simple', %s)
+                       ) AS rank
+                FROM knowledge_documents d
+                LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
+                WHERE to_tsvector('simple', coalesce(d.content, '') || ' ' || coalesce(d.title, '')) @@ to_tsquery('simple', %s)
+                      AND d.file_path NOT LIKE 'baselines/%%'
+                      AND d.file_path NOT LIKE 'baseline-drafts/%%'
+                      AND ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
+                ORDER BY rank DESC
+                LIMIT %s;
+                """
+                cur.execute(sql_fallback, (tsquery_str, tsquery_str, owner_id, limit))
+
             columns = [col[0] for col in cur.description]
             results = []
             for row in cur.fetchall():
