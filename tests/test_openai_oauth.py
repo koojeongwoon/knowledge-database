@@ -28,12 +28,9 @@ class OpenAIOAuthClientTests(unittest.IsolatedAsyncioTestCase):
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "device_code": "dev-12345",
+            "device_auth_id": "dev-12345",
             "user_code": "ABCD-WXYZ",
-            "verification_uri": "https://auth.openai.com/activate",
-            "verification_uri_complete": "https://auth.openai.com/activate?user_code=ABCD-WXYZ",
-            "expires_in": 900,
-            "interval": 5,
+            "interval": "5",
         }
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
@@ -42,7 +39,7 @@ class OpenAIOAuthClientTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(result["device_code"], "dev-12345")
             self.assertEqual(result["user_code"], "ABCD-WXYZ")
-            self.assertEqual(result["verification_uri"], "https://auth.openai.com/activate")
+            self.assertEqual(result["verification_uri"], "https://auth.openai.com/codex/device")
             self.assertEqual(result["expires_in"], 900)
             self.assertEqual(result["interval"], 5)
 

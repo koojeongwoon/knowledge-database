@@ -29,6 +29,7 @@ class SwitchAuthTypePayload(BaseModel):
 
 class DeviceCodePollPayload(BaseModel):
     device_code: str = Field(..., min_length=1)
+    user_code: Optional[str] = Field(default=None)
 
 
 def create_configuration_router(
@@ -100,7 +101,7 @@ def create_configuration_router(
         try:
             return await client.start_device_flow()
         except OpenAIOAuthError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/settings/openai-oauth/poll")
     async def poll_openai_device_token(
@@ -111,7 +112,7 @@ def create_configuration_router(
         owner_id = await authenticate(authorization, knowledge_session)
         client = OpenAIOAuthClient()
         try:
-            token_set = await client.check_device_token(payload.device_code)
+            token_set = await client.check_device_token(payload.device_code, payload.user_code)
             if token_set is None:
                 return {"status": "pending"}
 
@@ -133,7 +134,6 @@ def create_configuration_router(
         except OpenAIOAuthDenied as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except OpenAIOAuthError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return router
-

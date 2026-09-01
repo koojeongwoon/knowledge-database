@@ -36,7 +36,12 @@ async function startOAuthFlow() {
   statusText.textContent = "인증 코드 요청 중…";
   try {
     const res = await fetch("/api/settings/openai-oauth/device-code", { method: "POST" });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error(`서버 응답 오류 (HTTP ${res.status})`);
+    }
     if (!res.ok) throw new Error(data.detail || "인증 코드를 받지 못했습니다.");
 
     byId("oauth-user-code").textContent = data.user_code;
@@ -54,9 +59,17 @@ async function startOAuthFlow() {
         const pollRes = await fetch("/api/settings/openai-oauth/poll", {
           method: "POST",
           headers: headers(),
-          body: JSON.stringify({ device_code: data.device_code })
+          body: JSON.stringify({
+            device_code: data.device_code,
+            user_code: data.user_code
+          })
         });
-        const pollData = await pollRes.json();
+        let pollData;
+        try {
+          pollData = await pollRes.json();
+        } catch (e) {
+          return;
+        }
         if (pollData.status === "complete") {
           clearInterval(pollTimer);
           guide.style.display = "none";
@@ -83,10 +96,13 @@ async function unlinkOAuth() {
       headers: headers(),
       body: JSON.stringify({ llm_auth_type: "api_key" })
     });
-    if (!res.ok) {
-      const data = await res.json();
-      throw new Error(data.detail || "전환 실패");
+    let data;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error(`전환 실패 (HTTP ${res.status})`);
     }
+    if (!res.ok) throw new Error(data.detail || "전환 실패");
     updateAuthStateUI("api_key", false, true);
     message("API Key 추론 모드로 전환되었습니다.");
   } catch (e) {
@@ -98,7 +114,12 @@ async function loadSettings() {
   try {
     const response = await fetch("/api/settings");
     if (response.status === 401) { location.replace("/login"); return; }
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error(`설정 응답 오류 (HTTP ${response.status})`);
+    }
     if (!response.ok) throw new Error(data.detail || "설정을 불러오지 못했습니다.");
 
     updateAuthStateUI(
@@ -140,7 +161,12 @@ byId("settings-form").addEventListener("submit", async event => {
   };
   try {
     const response = await fetch("/api/settings", { method: "PUT", headers: headers(), body: JSON.stringify(payload) });
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error(`저장 실패 (HTTP ${response.status})`);
+    }
     if (!response.ok) throw new Error(data.detail || "저장하지 못했습니다.");
     location.replace("/settings");
   } catch (error) {

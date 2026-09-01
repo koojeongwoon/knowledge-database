@@ -39,7 +39,7 @@ class OpenAITokenSet:
 
 class OpenAIOAuthClient:
     """
-    OpenAI OAuth 2.0 Device Authorization Grant (RFC 8628) 및 토큰 갱신 클라이언트.
+    OpenAI OAuth 2.0 Device Authorization Grant 및 토큰 갱신 클라이언트.
     ChatGPT Plus/Pro 계정의 인증 토큰을 획득하고 관리합니다.
     """
 
@@ -47,13 +47,17 @@ class OpenAIOAuthClient:
         self,
         client_id: Optional[str] = None,
         device_endpoint: Optional[str] = None,
+        device_token_endpoint: Optional[str] = None,
         token_endpoint: Optional[str] = None,
         scope: Optional[str] = None,
         timeout: float = 15.0,
     ):
-        self.client_id = client_id or os.getenv("OPENAI_OAUTH_CLIENT_ID", "app-654e872c918e476d8c826dfd")
+        self.client_id = client_id or os.getenv("OPENAI_OAUTH_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann")
         self.device_endpoint = device_endpoint or os.getenv(
-            "OPENAI_DEVICE_AUTH_ENDPOINT", "https://auth.openai.com/oauth/device/code"
+            "OPENAI_DEVICE_AUTH_ENDPOINT", "https://auth.openai.com/api/accounts/deviceauth/usercode"
+        )
+        self.device_token_endpoint = device_token_endpoint or os.getenv(
+            "OPENAI_DEVICE_TOKEN_ENDPOINT", "https://auth.openai.com/api/accounts/deviceauth/token"
         )
         self.token_endpoint = token_endpoint or os.getenv(
             "OPENAI_TOKEN_ENDPOINT", "https://auth.openai.com/oauth/token"
@@ -69,49 +73,57 @@ class OpenAIOAuthClient:
         """
         payload = {
             "client_id": self.client_id,
-            "scope": self.scope,
         }
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
                     self.device_endpoint,
-                    data=payload,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
                 )
         except Exception as exc:
-            raise OpenAIOAuthError(f"OpenAI Device 인증 요청 실패: {exc}") from exc
+            raise OpenAIOAuthError(f"OpenAI Device 인증 요청 네트워크 오류: {exc}") from exc
 
         if response.status_code != 200:
             raise OpenAIOAuthError(
-                f"OpenAI Device 인증 시작 실패 ({response.status_code}): {response.text}"
+                f"OpenAI Device 인증 시작 실패 (HTTP {response.status_code})"
             )
 
         data = response.json()
+        device_auth_id = data.get("device_auth_id", "")
+        user_code = data.get("user_code", "")
+        interval = int(data.get("interval", 5))
+
         return {
-            "device_code": data.get("device_code", ""),
-            "user_code": data.get("user_code", ""),
-            "verification_uri": data.get("verification_uri", ""),
-            "verification_uri_complete": data.get("verification_uri_complete", ""),
-            "expires_in": int(data.get("expires_in", 900)),
-            "interval": int(data.get("interval", 5)),
+            "device_code": device_auth_id,
+            "device_auth_id": device_auth_id,
+            "user_code": user_code,
+            "verification_uri": "https://auth.openai.com/codex/device",
+            "verification_uri_complete": f"https://auth.openai.com/codex/device?user_code={user_code}",
+            "expires_in": 900,
+            "interval": interval,
         }
 
-    async def check_device_token(self, device_code: str) -> Optional[OpenAITokenSet]:
+    async def check_device_token(
+        self, device_code: str, user_code: Optional[str] = None
+    ) -> Optional[OpenAITokenSet]:
         """
         단일 폴링 요청으로 토큰 발급 여부를 확인합니다.
         대기 중이면 None을 반환하고, 완료 시 OpenAITokenSet을 반환합니다.
         """
         payload = {
-            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            "device_code": device_code,
             "client_id": self.client_id,
+            "device_auth_id": device_code,
         }
+        if user_code:
+            payload["user_code"] = user_code
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
-                    self.token_endpoint,
-                    data=payload,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    self.device_token_endpoint,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
                 )
         except Exception as exc:
             raise OpenAIOAuthError(f"OpenAI 토큰 폴링 네트워크 오류: {exc}") from exc
@@ -128,22 +140,37 @@ class OpenAIOAuthClient:
                 id_token=data.get("id_token", ""),
             )
 
-        error_data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-        error_code = error_data.get("error", response.text)
+        error_data = {}
+        try:
+            error_data = response.json()
+        except Exception:
+            pass
 
-        if error_code == "authorization_pending":
+        err_obj = error_data.get("error", {})
+        error_code = (
+            err_obj.get("code")
+            if isinstance(err_obj, dict)
+            else error_data.get("error", str(response.status_code))
+        )
+
+        if error_code in ("deviceauth_authorization_pending", "authorization_pending"):
             return None
         elif error_code == "slow_down":
             raise OpenAIOAuthSlowDown("폴링 간격을 늘려야 합니다.")
-        elif error_code == "expired_token":
+        elif error_code in ("deviceauth_expired", "expired_token"):
             raise OpenAIOAuthExpired("인증 코드가 만료되었습니다. 다시 시도해 주세요.")
-        elif error_code == "access_denied":
+        elif error_code in ("deviceauth_access_denied", "access_denied"):
             raise OpenAIOAuthDenied("사용자가 인증을 거부했습니다.")
         else:
-            raise OpenAIOAuthError(f"토큰 획득 실패 ({response.status_code}): {error_code}")
+            err_msg = (
+                err_obj.get("message")
+                if isinstance(err_obj, dict) and err_obj.get("message")
+                else error_code
+            )
+            raise OpenAIOAuthError(f"토큰 획득 실패 ({response.status_code}): {err_msg}")
 
     async def poll_until_complete(
-        self, device_code: str, interval: int = 5, timeout: int = 300
+        self, device_code: str, user_code: Optional[str] = None, interval: int = 5, timeout: int = 300
     ) -> OpenAITokenSet:
         """
         토큰이 발급되거나 타임아웃될 때까지 주기적으로 폴링합니다.
@@ -153,7 +180,7 @@ class OpenAIOAuthClient:
 
         while time.time() - start_time < timeout:
             try:
-                token_set = await self.check_device_token(device_code)
+                token_set = await self.check_device_token(device_code, user_code)
                 if token_set is not None:
                     return token_set
             except OpenAIOAuthSlowDown:
@@ -187,7 +214,7 @@ class OpenAIOAuthClient:
 
         if response.status_code != 200:
             raise OpenAIOAuthError(
-                f"OpenAI 토큰 갱신 실패 ({response.status_code}): {response.text}"
+                f"OpenAI 토큰 갱신 실패 (HTTP {response.status_code})"
             )
 
         data = response.json()
@@ -226,7 +253,7 @@ class OpenAIOAuthClient:
 
         if response.status_code != 200:
             raise OpenAIOAuthError(
-                f"OpenAI 토큰 갱신 실패 ({response.status_code}): {response.text}"
+                f"OpenAI 토큰 갱신 실패 (HTTP {response.status_code})"
             )
 
         data = response.json()
@@ -240,4 +267,3 @@ class OpenAIOAuthClient:
             scope=data.get("scope", ""),
             id_token=data.get("id_token", ""),
         )
-
