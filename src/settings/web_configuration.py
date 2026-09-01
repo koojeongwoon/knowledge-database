@@ -14,6 +14,7 @@ from src.settings.openai_oauth import (
 
 class SettingsPayload(BaseModel):
     llm_auth_type: Optional[str] = Field(default=None, pattern="^(api_key|openai_oauth)$")
+    llm_model_name: Optional[str] = Field(default=None, max_length=100)
     openai_api_key: Optional[str] = Field(default=None, max_length=512)
     embedding_api_key: Optional[str] = Field(default=None, max_length=512)
     storage_type: str = Field(default="s3", pattern="^(s3|r2)$")

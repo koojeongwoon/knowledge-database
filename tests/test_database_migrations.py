@@ -78,6 +78,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertIn("ADD COLUMN IF NOT EXISTS ontology_context_grade", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS llm_auth_type", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS openai_oauth_access_token_encrypted", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS llm_model_name", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_schema_migrations", sql)
         self.assertIn("SELECT pg_advisory_xact_lock", sql)
 

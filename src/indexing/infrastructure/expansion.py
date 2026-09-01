@@ -81,10 +81,11 @@ def create_document_expander() -> BaseDocumentExpander:
     api_key = config.get("llm_bearer_token") or config.get("openai_api_key")
     if not api_key:
         return NoOpDocumentExpander()
+    model = config.get("llm_model_name") or ("gpt-5.6-luna" if config.get("llm_auth_type") == "openai_oauth" else "gpt-4o-mini")
     try:
         from openai import OpenAI
 
-        return OpenAIDocumentExpander(OpenAI(api_key=api_key))
+        return OpenAIDocumentExpander(OpenAI(api_key=api_key), model=model)
     except Exception as exc:
         print(f"Warning: Failed to initialize document expansion: {exc}")
         return NoOpDocumentExpander()

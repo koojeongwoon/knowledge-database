@@ -16,6 +16,9 @@ async function loadSettings() {
     
     byId("openai-state").textContent = data.openai_configured ? "등록됨" : "미등록";
     byId("llm-auth-type-state").textContent = data.llm_auth_type === "openai_oauth" && data.openai_oauth_configured ? "ChatGPT Plus/Pro 구독 (OAuth)" : (data.openai_configured ? "OpenAI API Key (기본)" : "미설정");
+    if (byId("llm-model-state")) {
+      byId("llm-model-state").textContent = data.llm_model_name || "gpt-5.6-luna";
+    }
     byId("storage-type-value").textContent = data.storage_type === "r2" ? "Cloudflare R2" : "S3 호환 저장소";
     byId("endpoint-value").textContent = data.s3_endpoint_url || "미등록";
     byId("bucket-value").textContent = data.s3_bucket_name || "미등록";

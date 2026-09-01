@@ -24,7 +24,7 @@ class FakeCursor:
             self._last_result = row
         elif query_str.startswith("insert into knowledge_user_settings"):
             # owner_id, openai_key, storage_type, s3_endpoint, s3_bucket, access_key, secret_key,
-            # llm_auth_type, oauth_access, oauth_refresh, oauth_expires_at, embedding_key
+            # llm_auth_type, oauth_access, oauth_refresh, oauth_expires_at, embedding_key, llm_model_name
             owner_id = params[0]
             openai_key = params[1]
             storage_type = params[2]
@@ -37,6 +37,7 @@ class FakeCursor:
             oauth_refresh = params[9]
             oauth_expires_at = params[10]
             embedding_key = params[11]
+            llm_model_name = params[12] if len(params) > 12 else "gpt-5.6-luna"
 
             self.storage[owner_id] = (
                 openai_key,
@@ -51,6 +52,7 @@ class FakeCursor:
                 oauth_refresh,
                 oauth_expires_at,
                 embedding_key,
+                llm_model_name,
             )
 
     def fetchone(self):
@@ -211,14 +213,30 @@ class LLMAuthSettingsTests(unittest.TestCase):
         token = current_user_config.set({
             "user_id": "USER_1",
             "llm_bearer_token": "oauth-bearer-token",
+            "llm_model_name": "gpt-5.6-luna",
         })
         try:
             with patch("src.core.config.DOCUMENT_EXPANSION_ENABLED", True):
                 expander = create_document_expander()
                 self.assertTrue(expander.enabled)
+                self.assertEqual(expander.model, "gpt-5.6-luna")
                 mock_openai.assert_called_with(api_key="oauth-bearer-token")
         finally:
             current_user_config.reset(token)
+
+    def test_save_and_retrieve_llm_model_name(self):
+        saved = self.service.save("USER_1", {
+            "llm_auth_type": "openai_oauth",
+            "llm_model_name": "gpt-5.6-luna",
+            "s3_endpoint_url": "https://r2.example.com",
+            "s3_bucket_name": "my-bucket",
+            "s3_access_key_id": "access-key",
+            "s3_secret_access_key": "secret-key",
+        })
+        self.assertEqual(saved["llm_model_name"], "gpt-5.6-luna")
+
+        runtime = self.service.get_runtime_config("USER_1")
+        self.assertEqual(runtime["llm_model_name"], "gpt-5.6-luna")
 
 
 if __name__ == "__main__":

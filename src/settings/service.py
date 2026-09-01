@@ -60,7 +60,7 @@ class UserSettingsService:
                        s3_secret_access_key_encrypted, updated_at,
                        llm_auth_type, openai_oauth_access_token_encrypted,
                        openai_oauth_refresh_token_encrypted, openai_oauth_expires_at,
-                       embedding_api_key_encrypted
+                       embedding_api_key_encrypted, llm_model_name
                 FROM knowledge_user_settings WHERE owner_id = %s;
             """, (owner_id,))
             return cur.fetchone()
@@ -72,6 +72,8 @@ class UserSettingsService:
         llm_auth_type = values.get("llm_auth_type") or (existing[7] if existing and existing[7] else "api_key")
         if llm_auth_type not in ("api_key", "openai_oauth"):
             llm_auth_type = "api_key"
+
+        llm_model_name = values.get("llm_model_name") or (existing[12] if existing and len(existing) > 12 and existing[12] else "gpt-5.6-luna")
 
         openai_key = (
             self._encrypt(values.get("openai_api_key"))
@@ -123,8 +125,8 @@ class UserSettingsService:
                     s3_secret_access_key_encrypted, updated_at,
                     llm_auth_type, openai_oauth_access_token_encrypted,
                     openai_oauth_refresh_token_encrypted, openai_oauth_expires_at,
-                    embedding_api_key_encrypted
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s)
+                    embedding_api_key_encrypted, llm_model_name
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (owner_id) DO UPDATE SET
                     openai_api_key_encrypted = EXCLUDED.openai_api_key_encrypted,
                     storage_type = EXCLUDED.storage_type,
@@ -137,12 +139,13 @@ class UserSettingsService:
                     openai_oauth_refresh_token_encrypted = EXCLUDED.openai_oauth_refresh_token_encrypted,
                     openai_oauth_expires_at = EXCLUDED.openai_oauth_expires_at,
                     embedding_api_key_encrypted = EXCLUDED.embedding_api_key_encrypted,
+                    llm_model_name = EXCLUDED.llm_model_name,
                     updated_at = CURRENT_TIMESTAMP;
             """, (
                 owner_id, openai_key, storage_type,
                 s3_endpoint, s3_bucket, access_key, secret_key,
                 llm_auth_type, oauth_access_token, oauth_refresh_token,
-                oauth_expires_at, embedding_key
+                oauth_expires_at, embedding_key, llm_model_name
             ))
 
         invalidate_user_settings_cache(owner_id)
@@ -175,6 +178,7 @@ class UserSettingsService:
             return {
                 "configured": False,
                 "llm_auth_type": "api_key",
+                "llm_model_name": "gpt-5.6-luna",
                 "openai_configured": False,
                 "openai_oauth_configured": False,
                 "openai_oauth_expires_at": None,
@@ -189,6 +193,7 @@ class UserSettingsService:
         return {
             "configured": True,
             "llm_auth_type": row[7] if len(row) > 7 and row[7] else "api_key",
+            "llm_model_name": row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna",
             "openai_configured": bool(row[0]) if len(row) > 0 else False,
             "openai_oauth_configured": bool(row[8]) if len(row) > 8 and row[8] else False,
             "openai_oauth_expires_at": row[10] if len(row) > 10 else None,
@@ -231,6 +236,7 @@ class UserSettingsService:
         oauth_refresh_token = self._decrypt(row[9]) if len(row) > 9 else None
         oauth_expires_at = row[10] if len(row) > 10 else None
         embedding_api_key = (self._decrypt(row[11]) if len(row) > 11 else None) or openai_api_key
+        llm_model_name = row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna"
 
 
         # OAuth 토큰 자동 갱신 처리
@@ -263,6 +269,7 @@ class UserSettingsService:
 
         config = {
             "llm_auth_type": auth_type,
+            "llm_model_name": llm_model_name,
             "openai_api_key": openai_api_key,
             "openai_oauth_access_token": oauth_access_token,
             "openai_oauth_refresh_token": oauth_refresh_token,

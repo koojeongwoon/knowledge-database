@@ -923,6 +923,13 @@ def _add_llm_auth_and_embedding_settings(cur) -> None:
     """)
 
 
+def _add_llm_model_name_to_user_settings(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_user_settings
+            ADD COLUMN IF NOT EXISTS llm_model_name VARCHAR(100) NOT NULL DEFAULT 'gpt-5.6-luna';
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -944,6 +951,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(18, "create_knowledge_baselines", _create_knowledge_baselines),
     Migration(19, "add_learning_transfer_evidence", _add_learning_transfer_evidence),
     Migration(20, "add_llm_auth_and_embedding_settings", _add_llm_auth_and_embedding_settings),
+    Migration(21, "add_llm_model_name_to_user_settings", _add_llm_model_name_to_user_settings),
 )
 
 

@@ -29,7 +29,25 @@
       </p>
       <input id="openai-key" type="password" autocomplete="new-password" placeholder="기존 값을 유지하려면 비워두세요">
 
-      <!-- 2. ChatGPT Plus / Pro 구독 연동 (선택 옵션) -->
+      <!-- 2. LLM 추론 모델 선택 (현행화) -->
+      <label for="llm-model" style="margin-top:14px">LLM 추론 모델</label>
+      <p class="hint" style="margin-top:-4px;margin-bottom:8px;font-size:0.85rem;color:#6c757d">
+        지식 등록 시 AI 문서 확장(질문/키워드 추출) 및 AI 작업에 사용할 모델을 선택합니다.
+      </p>
+      <select id="llm-model">
+        <optgroup label="ChatGPT Plus/Pro 구독 (OAuth 권장)">
+          <option value="gpt-5.6-luna">gpt-5.6-luna (추천: 초고속 & 쿼터 대폭 절약)</option>
+          <option value="gpt-5.6-sol">gpt-5.6-sol (플래그십 고추론)</option>
+        </optgroup>
+        <optgroup label="OpenAI 최신 모델">
+          <option value="gpt-4o-mini">gpt-4o-mini (경량 고속 표준)</option>
+          <option value="gpt-4o">gpt-4o (표준 고성능)</option>
+          <option value="o3-mini">o3-mini (추론 특화 모델)</option>
+          <option value="o1">o1 (풀 딥 추론 모델)</option>
+        </optgroup>
+      </select>
+
+      <!-- 3. ChatGPT Plus / Pro 구독 연동 (선택 옵션) -->
       <div class="card" style="background:#f8f9fa;border:1px solid #e9ecef;padding:14px 16px;margin-top:16px;margin-bottom:8px;border-radius:6px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <strong style="font-size:0.95rem;color:#212529">ChatGPT Plus / Pro 구독 연동 (선택)</strong>

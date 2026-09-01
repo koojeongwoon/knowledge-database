@@ -128,6 +128,10 @@ async function loadSettings() {
       data.openai_configured || false
     );
 
+    if (data.llm_model_name && byId("llm-model")) {
+      byId("llm-model").value = data.llm_model_name;
+    }
+
     byId("storage-type").value = data.storage_type || "s3";
     byId("endpoint-url").value = data.s3_endpoint_url || "";
     byId("bucket-name").value = data.s3_bucket_name || "";
@@ -151,6 +155,7 @@ byId("settings-form").addEventListener("submit", async event => {
   const apiKeyVal = byId("openai-key").value || null;
   const payload = {
     llm_auth_type: currentAuthType,
+    llm_model_name: byId("llm-model") ? byId("llm-model").value : "gpt-5.6-luna",
     openai_api_key: apiKeyVal,
     embedding_api_key: apiKeyVal,
     storage_type: byId("storage-type").value,
