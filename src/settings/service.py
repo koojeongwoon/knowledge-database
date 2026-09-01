@@ -239,31 +239,16 @@ class UserSettingsService:
         llm_model_name = row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna"
 
 
-        # OAuth 토큰 자동 갱신 처리
-        if (
-            auth_type == "openai_oauth"
-            and oauth_expires_at
-            and time.time() > (oauth_expires_at - 60)
-            and oauth_refresh_token
-            and allow_refresh
-        ):
+        # IAM 중앙 인증 서버로부터 최신 Codex Access Token 획득 (Redis 캐싱 & 1순위 개인 / 2순위 조직 Fallback 지원)
+        if auth_type == "openai_oauth":
             try:
-                from src.settings.openai_oauth import OpenAIOAuthClient
-
-                client = OpenAIOAuthClient()
-                refreshed = client.refresh_access_token_sync(oauth_refresh_token)
-                self.save_openai_oauth_tokens(
-                    owner_id,
-                    refreshed.access_token,
-                    refreshed.refresh_token,
-                    refreshed.expires_at,
-                )
-                oauth_access_token = refreshed.access_token
-                oauth_refresh_token = refreshed.refresh_token
-                oauth_expires_at = refreshed.expires_at
+                from src.settings.iam_codex_client import IAMCodexClient
+                iam_client = IAMCodexClient()
+                iam_token_resp = iam_client.get_valid_token(user_id=owner_id)
+                if iam_token_resp and "access_token" in iam_token_resp:
+                    oauth_access_token = iam_token_resp["access_token"]
             except Exception as exc:
-                # 갱신 실패 시 기존 토큰 유지하되 경고 로그
-                print(f"Warning: Failed to auto-refresh OpenAI OAuth token for user {owner_id}: {exc}")
+                print(f"Warning: Failed to fetch Codex token from IAM server: {exc}")
 
         llm_bearer_token = oauth_access_token if auth_type == "openai_oauth" else openai_api_key
 

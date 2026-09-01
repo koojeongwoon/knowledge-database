@@ -98,11 +98,12 @@ def create_configuration_router(
         knowledge_session: Optional[str] = Cookie(default=None),
     ):
         await authenticate(authorization, knowledge_session)
-        client = OpenAIOAuthClient()
+        from src.settings.iam_codex_client import IAMCodexClient
+        iam_client = IAMCodexClient()
         try:
-            return await client.start_device_flow()
-        except OpenAIOAuthError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return await iam_client.start_device_flow()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"인증 서버(IAM) 연동 실패: {exc}") from exc
 
     @router.post("/api/settings/openai-oauth/poll")
     async def poll_openai_device_token(
@@ -111,30 +112,26 @@ def create_configuration_router(
         knowledge_session: Optional[str] = Cookie(default=None),
     ):
         owner_id = await authenticate(authorization, knowledge_session)
-        client = OpenAIOAuthClient()
+        from src.settings.iam_codex_client import IAMCodexClient
+        iam_client = IAMCodexClient()
         try:
-            token_set = await client.check_device_token(payload.device_code, payload.user_code)
-            if token_set is None:
+            iam_resp = await iam_client.check_device_token(
+                device_code=payload.device_code,
+                user_code=payload.user_code,
+                user_id=owner_id,
+            )
+            if iam_resp.get("status") == "COMPLETED":
+                service = service_factory()
+                try:
+                    saved = service.switch_llm_auth_type(owner_id, "openai_oauth")
+                    return {"status": "complete", "settings": saved}
+                finally:
+                    service.db_manager.close()
+            elif iam_resp.get("status") == "PENDING":
                 return {"status": "pending"}
-
-            service = service_factory()
-            try:
-                saved = service.save_openai_oauth_tokens(
-                    owner_id=owner_id,
-                    access_token=token_set.access_token,
-                    refresh_token=token_set.refresh_token,
-                    expires_at=token_set.expires_at,
-                )
-                return {"status": "complete", "settings": saved}
-            finally:
-                service.db_manager.close()
-        except OpenAIOAuthSlowDown:
-            return {"status": "slow_down"}
-        except OpenAIOAuthExpired as exc:
-            raise HTTPException(status_code=410, detail=str(exc)) from exc
-        except OpenAIOAuthDenied as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except OpenAIOAuthError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            else:
+                return {"status": "pending"}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"인증 서버(IAM) 토큰 확인 실패: {exc}") from exc
 
     return router
