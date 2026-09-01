@@ -239,16 +239,22 @@ class UserSettingsService:
         llm_model_name = row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna"
 
 
-        # IAM 중앙 인증 서버로부터 최신 Codex Access Token 획득 (Redis 캐싱 & 1순위 개인 / 2순위 조직 Fallback 지원)
-        if auth_type == "openai_oauth":
-            try:
-                from src.settings.iam_codex_client import IAMCodexClient
-                iam_client = IAMCodexClient()
-                iam_token_resp = iam_client.get_valid_token(user_id=owner_id)
-                if iam_token_resp and "access_token" in iam_token_resp:
-                    oauth_access_token = iam_token_resp["access_token"]
-            except Exception as exc:
-                print(f"Warning: Failed to fetch Codex token from IAM server: {exc}")
+        # IAM 중앙 인증 서버로부터 최신 AI 자격증명 번들 획득 (Codex Token + OpenAI Key + Embedding Key)
+        try:
+            from src.settings.iam_codex_client import IAMCodexClient
+            iam_client = IAMCodexClient()
+            bundle = iam_client.get_ai_bundle(user_id=owner_id)
+            if bundle:
+                if bundle.get("codex", {}).get("linked"):
+                    oauth_access_token = bundle["codex"].get("access_token")
+                if bundle.get("openai_api_key", {}).get("configured"):
+                    openai_api_key = bundle["openai_api_key"].get("api_key")
+                if bundle.get("embedding_api_key", {}).get("configured"):
+                    embedding_api_key = bundle["embedding_api_key"].get("api_key")
+                elif openai_api_key:
+                    embedding_api_key = openai_api_key
+        except Exception as exc:
+            print(f"Warning: Failed to fetch AI bundle from IAM server: {exc}")
 
         llm_bearer_token = oauth_access_token if auth_type == "openai_oauth" else openai_api_key
 
