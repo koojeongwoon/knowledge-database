@@ -373,7 +373,7 @@ class SettingsWebTests(unittest.TestCase):
                 os.environ["MCP_PUBLIC_HOST"] = old_mcp
 
     @patch("src.settings.web._authenticated_user", return_value="USER_1")
-    @patch("src.settings.openai_oauth.OpenAIOAuthClient.start_device_flow")
+    @patch("src.settings.iam_codex_client.IAMCodexClient.start_device_flow")
     def test_start_openai_device_code_endpoint(self, mock_start, mock_auth):
         self.authenticate()
         mock_start.return_value = {
@@ -389,25 +389,19 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(response.json()["user_code"], "USER-1234")
 
     @patch("src.settings.web._authenticated_user", return_value="USER_1")
-    @patch("src.settings.openai_oauth.OpenAIOAuthClient.check_device_token")
-    @patch("src.settings.service.UserSettingsService.save_openai_oauth_tokens")
-    def test_poll_openai_device_token_endpoint(self, mock_save, mock_check, mock_auth):
-        from src.settings.openai_oauth import OpenAITokenSet
-
+    @patch("src.settings.iam_codex_client.IAMCodexClient.check_device_token")
+    @patch("src.settings.service.UserSettingsService.switch_llm_auth_type")
+    def test_poll_openai_device_token_endpoint(self, mock_switch, mock_check, mock_auth):
         self.authenticate()
         # 1. Pending status
-        mock_check.return_value = None
+        mock_check.return_value = {"status": "PENDING"}
         pending_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123"})
         self.assertEqual(pending_resp.status_code, 200)
         self.assertEqual(pending_resp.json()["status"], "pending")
 
         # 2. Complete status
-        mock_check.return_value = OpenAITokenSet(
-            access_token="acc-token",
-            refresh_token="ref-token",
-            expires_at=1700000000,
-        )
-        mock_save.return_value = {"configured": True, "llm_auth_type": "openai_oauth"}
+        mock_check.return_value = {"status": "COMPLETED"}
+        mock_switch.return_value = {"configured": True, "llm_auth_type": "openai_oauth"}
 
         complete_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123"})
         self.assertEqual(complete_resp.status_code, 200)

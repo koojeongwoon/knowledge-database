@@ -3,6 +3,7 @@ from typing import Optional
 
 import jwt
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.middleware import _validate_api_key_cached
 from src.api_keys.auth import verify_auth_token
@@ -30,6 +31,16 @@ from src.core.storage.factory import invalidate_storage_cache
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 settings_app = FastAPI(title="LLM-Wiki Settings", docs_url=None, redoc_url=None)
+
+# ─── CORS 설정 (AppSec P1) ───
+settings_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 실제 배포 환경에 맞춰 도메인 확장 가능
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 SESSION_COOKIE = "knowledge_session"
 
 

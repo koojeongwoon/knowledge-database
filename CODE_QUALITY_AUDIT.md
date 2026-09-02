@@ -29,3 +29,4 @@
 - **과제 2 [P0 - PII 보호 / -10점]**: 검색 질의 및 본문 내 주민번호, API Key, 패스워드 `[REDACTED]` 자동 마스킹 (`src/core/security/sanitizer.py`)
 - **과제 3 [P1 - 일반 AppSec / -4점]**: Web UI 및 API 엔드포인트 CORS 오리진 제한 및 DoS 방어 Rate Limiting 미들웨어 추가
 - **과제 4 [P1 - 일반 AppSec / -3점]**: 테이블명/식별자 조작 시 `psycopg.sql.Identifier` 100% 강제로 SQL Injection 원천 차단
+- **과제 4 [P1 - 로깅 게이트]**: `src/core/logging/audit.py`에 `TimedRotatingFileHandler` 연동하여 감사 로그 일자별 자동 롤링/보관

@@ -8,12 +8,8 @@ from src.core.database.factory import DatabaseManager
 from src.core.database.migrations import run_database_migrations
 
 
-_SECRET_PATTERNS = (
-    re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b"),
-    re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
-    re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
-    re.compile(r"(?i)\b(password|passwd|secret|api[_ -]?key)\s*[:=]\s*\S+"),
-)
+from src.core.security.sanitizer import sanitize_text
+
 _FAILURE_REASONS = {
     "missing_answer", "irrelevant_results", "wrong_order",
     "insufficient_content", "intent_mismatch", "no_knowledge",
@@ -33,15 +29,7 @@ _ONTOLOGY_RULE_TYPES = {
 
 
 def redact_search_query(query: str) -> str:
-    redacted = query
-    for pattern in _SECRET_PATTERNS:
-        if pattern.pattern.startswith("(?i)\\b(bearer"):
-            redacted = pattern.sub(r"\1[REDACTED]", redacted)
-        elif pattern.pattern.startswith("(?i)\\b(password"):
-            redacted = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]", redacted)
-        else:
-            redacted = pattern.sub("[REDACTED]", redacted)
-    return redacted[:4000]
+    return sanitize_text(query)[:4000]
 
 
 class SearchFeedbackService:

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from src.api.exceptions import DatabaseException, WikiBaseException
+from src.core.security.guardrail import validate_prompt_safety
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,14 @@ class RetrievalApiHandler:
     audit: Callable[..., None]
 
     def search(self, query: str, limit: int, user_id: str, owner_id: str) -> str:
+        # Prompt Injection Guardrail 검증 및 살균
+        guard_result = validate_prompt_safety(query)
+        if not guard_result.is_safe:
+            self.audit(
+                "PROMPT_INJECTION_DETECTED", "WARNING", user_id=user_id,
+                payload={"query": query, "patterns": guard_result.detected_patterns, "risk": guard_result.risk_level}
+            )
+            query = guard_result.sanitized_text
         try:
             database = self.database_factory()
             database.connect()

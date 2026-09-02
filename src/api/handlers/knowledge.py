@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
+from src.core.security.guardrail import validate_prompt_safety
+
 
 @dataclass(frozen=True)
 class KnowledgeCommitApiHandler:
@@ -13,6 +15,15 @@ class KnowledgeCommitApiHandler:
         image_paths: Optional[List[str]], resource_paths: Optional[List[str]],
         resource_summaries: Optional[List[Dict[str, Any]]], visibility: str,
     ) -> Dict[str, Any]:
+        # Guardrail 검증 및 살균
+        guard_content = validate_prompt_safety(content)
+        if not guard_content.is_safe:
+            self.audit(
+                action="PROMPT_INJECTION_DETECTED", status="WARNING", user_id=user_id,
+                payload={"target": "knowledge_content", "title": title, "patterns": guard_content.detected_patterns}
+            )
+            content = guard_content.sanitized_text
+
         runtime = None
         try:
             runtime = self.runtime_factory()
