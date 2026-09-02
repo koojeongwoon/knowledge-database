@@ -933,20 +933,14 @@ def _add_llm_model_name_to_user_settings(cur) -> None:
 def _create_pg_search_bm25_indexes(cur) -> None:
     cur.execute("CREATE EXTENSION IF NOT EXISTS pg_search CASCADE;")
     cur.execute("""
-        CALL paradedb.create_bm25(
-            index_name => 'knowledge_documents_bm25_idx',
-            table_name => 'knowledge_documents',
-            key_field  => 'id',
-            text_fields => '{title: {}, content: {}}'
-        );
+        CREATE INDEX IF NOT EXISTS knowledge_documents_bm25_idx
+        ON knowledge_documents USING bm25 (id, title, content)
+        WITH (key_field='id');
     """)
     cur.execute("""
-        CALL paradedb.create_bm25(
-            index_name => 'knowledge_baseline_documents_bm25_idx',
-            table_name => 'knowledge_baseline_documents',
-            key_field  => 'id',
-            text_fields => '{title: {}, content: {}}'
-        );
+        CREATE INDEX IF NOT EXISTS knowledge_baseline_documents_bm25_idx
+        ON knowledge_baseline_documents USING bm25 (id, title, content)
+        WITH (key_field='id');
     """)
 
 
