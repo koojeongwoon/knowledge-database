@@ -239,11 +239,36 @@ class UserSettingsService:
         llm_model_name = row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna"
 
 
+        # 만료 임박 토큰 자동 갱신 (로컬 OAuth 토큰이 존재하는 경우)
+        if auth_type == "openai_oauth" and oauth_expires_at and time.time() > (oauth_expires_at - 60) and oauth_refresh_token and allow_refresh:
+            try:
+                from src.settings.openai_oauth import OpenAIOAuthClient
+                oauth_client = OpenAIOAuthClient()
+                refreshed_tokens = oauth_client.refresh_access_token_sync(oauth_refresh_token)
+                self.save(owner_id, {
+                    "openai_oauth_access_token": refreshed_tokens.access_token,
+                    "openai_oauth_refresh_token": refreshed_tokens.refresh_token,
+                    "openai_oauth_expires_at": refreshed_tokens.expires_at,
+                })
+                oauth_access_token = refreshed_tokens.access_token
+                oauth_refresh_token = refreshed_tokens.refresh_token
+                oauth_expires_at = refreshed_tokens.expires_at
+            except Exception as e:
+                print(f"Warning: Failed to auto-refresh OAuth token: {e}")
+
         # IAM 중앙 인증 서버로부터 최신 AI 자격증명 번들 획득 (Codex Token + OpenAI Key + Embedding Key)
         try:
             from src.settings.iam_codex_client import IAMCodexClient
             iam_client = IAMCodexClient()
-            bundle = iam_client.get_ai_bundle(user_id=owner_id)
+            # knowledge_users 테이블에서 SSO auth_id(sub_val)를 조회하여 IAM 서버에 표준 전달
+            auth_sub = None
+            with self.db_manager.cursor() as cur:
+                cur.execute("SELECT sub_val FROM knowledge_users WHERE user_id = %s OR sub_val = %s LIMIT 1;", (owner_id, owner_id))
+                u_row = cur.fetchone()
+                if u_row and u_row[0]:
+                    auth_sub = u_row[0]
+            lookup_user_id = auth_sub or owner_id
+            bundle = iam_client.get_ai_bundle(user_id=lookup_user_id)
             if bundle:
                 if bundle.get("codex", {}).get("linked"):
                     oauth_access_token = bundle["codex"].get("access_token")
