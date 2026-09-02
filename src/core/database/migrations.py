@@ -939,8 +939,8 @@ def _create_pg_search_bm25_indexes(cur) -> None:
     """)
     cur.execute("""
         CREATE INDEX IF NOT EXISTS knowledge_baseline_documents_bm25_idx
-        ON knowledge_baseline_documents USING bm25 (id, title, content)
-        WITH (key_field='id');
+        ON knowledge_baseline_documents USING bm25 (release_id, file_path, title, content)
+        WITH (key_field='release_id');
     """)
 
 
