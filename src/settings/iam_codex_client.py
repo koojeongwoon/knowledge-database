@@ -74,6 +74,26 @@ class IAMCodexClient:
             print(f"Warning: Failed to fetch Codex token from IAM server ({self.base_url}): {exc}")
             return None
 
+    def get_status(self, user_id: Optional[str] = None, org_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        동기 방식으로 IAM 서버에서 코덱스 연동 상태(user_linked, org_linked, scope)를 조회합니다.
+        """
+        params = {}
+        if user_id:
+            params["user_id"] = user_id
+        if org_id:
+            params["org_id"] = org_id
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(f"{self.base_url}/api/v1/codex/status", params=params)
+                if response.status_code == 200:
+                    return response.json()
+                return None
+        except Exception as exc:
+            print(f"Warning: Failed to fetch Codex status from IAM server ({self.base_url}): {exc}")
+            return None
+
     async def start_device_flow(self) -> Dict[str, Any]:
         """
         IAM 서버에 Device Auth 시작 요청을 보냅니다.

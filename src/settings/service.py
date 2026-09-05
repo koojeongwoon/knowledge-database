@@ -172,17 +172,60 @@ class UserSettingsService:
             raise ValueError(f"유효하지 않은 auth_type입니다: {auth_type}. ('api_key', 'openai_oauth' 중 선택)")
         return self.save(owner_id, {"llm_auth_type": auth_type})
 
+    def _resolve_iam_user_id(self, owner_id: str) -> str:
+        """
+        knowledge_users 테이블에서 SSO auth_id(sub_val)를 조회하여 반환합니다.
+        """
+        try:
+            with self.db_manager.cursor() as cur:
+                cur.execute("SELECT sub_val FROM knowledge_users WHERE user_id = %s OR sub_val = %s LIMIT 1;", (owner_id, owner_id))
+                u_row = cur.fetchone()
+                if u_row and u_row[0]:
+                    return u_row[0]
+        except Exception:
+            pass
+        return owner_id
+
     def get_public(self, owner_id: str) -> Dict[str, Any]:
         row = self._get_row(owner_id)
+
+        # IAM 중앙 인증 서버로부터 연동 정보 및 자격증명 상태 조회
+        iam_codex_linked = False
+        iam_openai_configured = False
+        iam_embedding_configured = False
+
+        try:
+            from src.settings.iam_codex_client import IAMCodexClient
+            iam_client = IAMCodexClient()
+            lookup_user_id = self._resolve_iam_user_id(owner_id)
+
+            # 1. AI 자격증명 번들 조회 (Codex 토큰 발급 가능 여부 및 API Key)
+            bundle = iam_client.get_ai_bundle(user_id=lookup_user_id)
+            if bundle:
+                if bundle.get("codex", {}).get("linked"):
+                    iam_codex_linked = True
+                if bundle.get("openai_api_key", {}).get("configured"):
+                    iam_openai_configured = True
+                if bundle.get("embedding_api_key", {}).get("configured"):
+                    iam_embedding_configured = True
+
+            # 2. 번들에서 linked가 아니더라도, IAM 서버에 Codex 계정이 등록되어 있는지 status API로 추가 확인
+            if not iam_codex_linked:
+                status_res = iam_client.get_status(user_id=lookup_user_id)
+                if status_res and (status_res.get("user_linked") or status_res.get("org_linked")):
+                    iam_codex_linked = True
+        except Exception as exc:
+            print(f"Warning: Failed to check IAM Codex/Credentials status: {exc}")
+
         if not row:
             return {
                 "configured": False,
-                "llm_auth_type": "api_key",
+                "llm_auth_type": "openai_oauth" if iam_codex_linked else "api_key",
                 "llm_model_name": "gpt-5.6-luna",
-                "openai_configured": False,
-                "openai_oauth_configured": False,
+                "openai_configured": iam_openai_configured,
+                "openai_oauth_configured": iam_codex_linked,
                 "openai_oauth_expires_at": None,
-                "embedding_configured": False,
+                "embedding_configured": iam_embedding_configured or iam_openai_configured,
                 "storage_type": "s3",
                 "s3_endpoint_url": "",
                 "s3_bucket_name": "",
@@ -190,14 +233,32 @@ class UserSettingsService:
                 "s3_secret_key_configured": False,
                 "updated_at": None,
             }
+
+        local_oauth_configured = bool(row[8]) if len(row) > 8 and row[8] else False
+        openai_oauth_configured = local_oauth_configured or iam_codex_linked
+        local_llm_auth_type = row[7] if len(row) > 7 and row[7] else "api_key"
+
+        # 로컬에 OAuth 토큰이 없더라도 IAM에 연동되어 있고 사용자가 oauth로 설정했거나 연동된 경우
+        llm_auth_type = local_llm_auth_type
+        if not local_oauth_configured and iam_codex_linked and local_llm_auth_type == "openai_oauth":
+            llm_auth_type = "openai_oauth"
+
+        openai_configured = (bool(row[0]) if len(row) > 0 else False) or iam_openai_configured
+        embedding_configured = (
+            (bool(row[11]) if len(row) > 11 and row[11] else False)
+            or (bool(row[0]) if len(row) > 0 and row[0] else False)
+            or iam_embedding_configured
+            or iam_openai_configured
+        )
+
         return {
             "configured": True,
-            "llm_auth_type": row[7] if len(row) > 7 and row[7] else "api_key",
+            "llm_auth_type": llm_auth_type,
             "llm_model_name": row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna",
-            "openai_configured": bool(row[0]) if len(row) > 0 else False,
-            "openai_oauth_configured": bool(row[8]) if len(row) > 8 and row[8] else False,
+            "openai_configured": openai_configured,
+            "openai_oauth_configured": openai_oauth_configured,
             "openai_oauth_expires_at": row[10] if len(row) > 10 else None,
-            "embedding_configured": (bool(row[11]) if len(row) > 11 and row[11] else False) or (bool(row[0]) if len(row) > 0 and row[0] else False),
+            "embedding_configured": embedding_configured,
             "storage_type": row[1] if len(row) > 1 else "s3",
             "s3_endpoint_url": (row[2] or "") if len(row) > 2 else "",
             "s3_bucket_name": (row[3] or "") if len(row) > 3 else "",
