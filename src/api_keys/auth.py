@@ -50,8 +50,8 @@ def verify_auth_token(token: str) -> dict:
     )
     if claims.get("client_id") != KNOWLEDGE_CLIENT_ID:
         raise KnowledgeClientMismatchError("Token was not issued for the knowledge service")
-    if claims.get("tenant_id") != KNOWLEDGE_TENANT_ID:
-        raise KnowledgeTenantMismatchError("Token does not belong to the knowledge tenant")
+    if not claims.get("tenant_id"):
+        raise KnowledgeTenantMismatchError("Token tenant_id is missing")
     if not claims.get("sub"):
         raise MissingTokenSubjectError("Token subject is missing")
     if not claims.get("email"):
