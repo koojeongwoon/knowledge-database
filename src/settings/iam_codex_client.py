@@ -9,9 +9,17 @@ class IAMCodexClient:
     개인 토큰 1순위 -> 조직 토큰 Fallback 및 Redis 캐싱/자동 갱신은 IAM 서버가 전담합니다.
     """
 
-    def __init__(self, iam_base_url: Optional[str] = None, timeout: float = 5.0):
+    def __init__(self, iam_base_url: Optional[str] = None, timeout: float = 5.0, client_id: Optional[str] = None, client_secret: Optional[str] = None):
         self.base_url = (iam_base_url or os.getenv("IAM_SERVER_URL", "http://localhost:8080")).rstrip("/")
         self.timeout = float(os.getenv("IAM_CLIENT_TIMEOUT_SECONDS", str(timeout)))
+        self.client_id = client_id or os.getenv("KNOWLEDGE_CLIENT_ID", "knowledge-service")
+        self.client_secret = client_secret or os.getenv("KNOWLEDGE_CLIENT_SECRET")
+
+    @property
+    def _auth(self) -> Optional[tuple]:
+        if self.client_id and self.client_secret:
+            return (self.client_id, self.client_secret)
+        return None
 
     def get_ai_bundle(self, user_id: Optional[str] = None, org_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
@@ -25,7 +33,7 @@ class IAMCodexClient:
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(f"{self.base_url}/api/v1/credentials/ai-bundle", params=params)
+                response = client.get(f"{self.base_url}/api/v1/credentials/ai-bundle", params=params, auth=self._auth)
                 if response.status_code == 200:
                     return response.json()
                 return None
@@ -45,7 +53,7 @@ class IAMCodexClient:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(f"{self.base_url}/api/v1/credentials/ai-bundle", params=params)
+                response = await client.get(f"{self.base_url}/api/v1/credentials/ai-bundle", params=params, auth=self._auth)
                 if response.status_code == 200:
                     return response.json()
                 return None
@@ -65,7 +73,7 @@ class IAMCodexClient:
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(f"{self.base_url}/api/v1/codex/token", params=params)
+                response = client.get(f"{self.base_url}/api/v1/codex/token", params=params, auth=self._auth)
                 if response.status_code == 200:
                     return response.json()
                 return None
@@ -86,7 +94,7 @@ class IAMCodexClient:
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.get(f"{self.base_url}/api/v1/codex/status", params=params)
+                response = client.get(f"{self.base_url}/api/v1/codex/status", params=params, auth=self._auth)
                 if response.status_code == 200:
                     return response.json()
                 return None
@@ -143,7 +151,7 @@ class IAMCodexClient:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(f"{self.base_url}/api/v1/codex/token", params=params)
+                response = await client.get(f"{self.base_url}/api/v1/codex/token", params=params, auth=self._auth)
                 if response.status_code == 200:
                     return response.json()
                 return None
