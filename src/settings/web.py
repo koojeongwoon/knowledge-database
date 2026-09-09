@@ -1,9 +1,11 @@
+import os
 from pathlib import Path
 from typing import Optional
 
 import jwt
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from src.api.middleware import _validate_api_key_cached
 from src.api_keys.auth import verify_auth_token
@@ -75,7 +77,10 @@ async def _authenticated_auth_id(authorization: Optional[str], session_token: Op
 
 
 @settings_app.get("/", include_in_schema=False)
-def root():
+def root(request: Request):
+    settings_host = request.headers.get("host", "").split(":", 1)[0].lower()
+    if settings_host and settings_host == os.getenv("SETTINGS_PUBLIC_HOST", "").lower():
+        return RedirectResponse("/login", status_code=302)
     return {"service": "LLM-Wiki MCP Server", "status": "ok",
             "mcp_endpoint": "/mcp", "settings_url": "/settings"}
 

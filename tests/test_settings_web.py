@@ -45,6 +45,12 @@ class SettingsWebTests(unittest.TestCase):
         callback = self.client.get("/callback")
         self.assertEqual(callback.status_code, 400)
 
+    @patch.dict(os.environ, {"SETTINGS_PUBLIC_HOST": "knowledge.lynply.com"})
+    def test_knowledge_root_redirects_to_login(self):
+        root = self.client.get("/", headers={"host": "knowledge.lynply.com"}, follow_redirects=False)
+        self.assertEqual(root.status_code, 302)
+        self.assertEqual(root.headers["location"], "/login")
+
     def test_jwks_client_uses_service_user_agent(self):
         client = _jwk_client()
         self.assertEqual(client.headers["User-Agent"], "llm-wiki-jwks/1.0")
@@ -421,5 +427,4 @@ class SettingsWebTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
