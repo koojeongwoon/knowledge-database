@@ -4,10 +4,12 @@ from functools import lru_cache
 import jwt
 from jwt import PyJWKClient
 
-AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL", "https://auth.snappytory.com").rstrip("/")
-AUTH_TOKEN_ISSUER = os.getenv("AUTH_TOKEN_ISSUER", "msa-auth-service")
+KNOWLEDGE_TENANT_ID = os.getenv("KNOWLEDGE_TENANT_ID", "ten_9664c024babc4110")
+AUTH_SERVER_URL = os.getenv(
+    "AUTH_SERVER_URL", f"https://auth.snappytory.com/t/{KNOWLEDGE_TENANT_ID}"
+).rstrip("/")
+AUTH_TOKEN_ISSUER = os.getenv("AUTH_TOKEN_ISSUER", AUTH_SERVER_URL)
 KNOWLEDGE_CLIENT_ID = os.getenv("KNOWLEDGE_CLIENT_ID", "knowledge-service")
-KNOWLEDGE_TENANT_ID = os.getenv("KNOWLEDGE_TENANT_ID", "knowledge")
 
 
 class KnowledgeClientMismatchError(jwt.InvalidTokenError):
@@ -46,12 +48,12 @@ def verify_auth_token(token: str) -> dict:
         signing_key.key,
         algorithms=["RS256"],
         issuer=AUTH_TOKEN_ISSUER,
-        options={"verify_aud": False},
+        audience=KNOWLEDGE_CLIENT_ID,
     )
     if claims.get("client_id") != KNOWLEDGE_CLIENT_ID:
         raise KnowledgeClientMismatchError("Token was not issued for the knowledge service")
-    if not claims.get("tenant_id"):
-        raise KnowledgeTenantMismatchError("Token tenant_id is missing")
+    if claims.get("tenant_id") != KNOWLEDGE_TENANT_ID:
+        raise KnowledgeTenantMismatchError("Token was not issued for the knowledge tenant")
     if not claims.get("sub"):
         raise MissingTokenSubjectError("Token subject is missing")
     if not claims.get("email"):

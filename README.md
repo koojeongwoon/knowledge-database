@@ -74,6 +74,12 @@ EMBEDDING_DIM=1536
 
 SETTINGS_PUBLIC_HOST=knowledge.lynply.com
 MCP_PUBLIC_HOST=mcp.lynply.com
+
+# 통합인증의 non-secret Tenant 계약 (client secret은 Kubernetes Secret으로 주입)
+KNOWLEDGE_TENANT_ID=ten_9664c024babc4110
+KNOWLEDGE_CLIENT_ID=knowledge-service
+AUTH_SERVER_URL=https://auth.snappytory.com/t/ten_9664c024babc4110
+AUTH_TOKEN_ISSUER=https://auth.snappytory.com/t/ten_9664c024babc4110
 ```
 
 실제 사용자 OpenAI/S3 자격 증명은 서버 공용 환경변수나 Git에 넣지 않습니다. 로그인 후 설정 화면에서 사용자별로 저장합니다.
