@@ -57,7 +57,8 @@ class BrokerStructuredChat:
                     value=line[5:].strip()
                     if value=='[DONE]':
                         if not oauth:done=True
-                        break
+                        continue
+                    if done:continue
                     event=json.loads(value)
                     if oauth:
                         event_type=event.get('type')
@@ -68,7 +69,7 @@ class BrokerStructuredChat:
                             result=event['response']
                             if result.get('status')!='completed' or any(item.get('type') not in ('message','reasoning') for item in result.get('output',[])):
                                 raise BrokerEmbeddingError('Codex response incomplete')
-                            done=True;finish='stop';break
+                            done=True;finish='stop'
                     else:
                         if 'error' in event:raise BrokerEmbeddingError('OpenAI response failed')
                         for choice in event.get('choices',[]):

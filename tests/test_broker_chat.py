@@ -52,7 +52,15 @@ def test_broker_mode_never_loads_llm_credentials(monkeypatch):
 
 
 def test_oauth_preserves_model_and_omits_unsupported_temperature(client_env):
+    class TrackingStream(httpx.SyncByteStream):
+        def __init__(self, chunks):
+            self.chunks=chunks;self.exhausted=False
+        def __iter__(self):
+            yield from self.chunks
+            self.exhausted=True
+    tracked=None
     def handler(req):
+        nonlocal tracked
         body=json.loads(req.content)
         assert req.url.path=='/v1/proxy/oauth'
         metadata=json.loads(base64.b64decode(req.headers['x-broker-request']))
@@ -62,9 +70,14 @@ def test_oauth_preserves_model_and_omits_unsupported_temperature(client_env):
         assert not {'temperature','max_completion_tokens','auth_type'} & body.keys()
         assert body['input'][0]['content'][0]['type']=='input_text'
         events=[{'type':'response.output_text.delta','delta':'{"expansions":[]}'},{'type':'response.completed','response':{'status':'completed','output':[]}}]
-        return httpx.Response(200,headers={'x-broker-response-source':'upstream'},text=''.join('data: '+json.dumps(e)+'\n\n' for e in events))
+        tracked=TrackingStream([
+            ''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode(),
+            b'data: [DONE]\n\n',
+        ])
+        return httpx.Response(200,headers={'x-broker-response-source':'upstream'},stream=tracked)
     client=BrokerStructuredChat('owner',client_env,httpx.MockTransport(handler),auth_type='openai_oauth')
     assert client.parse('gpt-5.6-luna',[{'role':'user','content':'x'}],BatchExpansionResponse,.2).expansions==[]
+    assert tracked.exhausted is True
 
 
 def test_runtime_broker_mode_bypasses_legacy_credential_cache(monkeypatch):
