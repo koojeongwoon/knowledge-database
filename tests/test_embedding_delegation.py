@@ -141,3 +141,29 @@ def test_delegation_management_exchanges_verified_session_and_sanitizes_failure(
     assert exc.value.status_code==409
     assert 'provider-secret' not in str(exc.value)
     assert len(seen)==2
+
+
+def test_public_origin_uses_configured_callback_behind_proxy(monkeypatch,binding):
+    monkeypatch.setenv('KNOWLEDGE_REDIRECT_URI','https://knowledge.example/callback')
+    browser,client,_=web(Repository(),binding)
+    body=dict(connection_id=binding['connection_id'],credential_version=1)
+    assert browser.put('/api/settings/embedding-binding',headers={'Origin':'http://testserver'},json=body).status_code==403
+    assert browser.put('/api/settings/embedding-binding',headers={'Origin':'https://knowledge.example'},json=body).status_code==200
+
+def test_worker_retry_loads_storage_only_in_broker_mode(monkeypatch):
+    from contextvars import ContextVar
+    from src.api.handlers.indexing import IndexingRetryApiHandler
+    monkeypatch.setenv('EMBEDDING_PROVIDER','broker')
+    database,repo,settings=Mock(),Mock(),Mock()
+    repo.claim.return_value=[{'owner_id':'owner','file_path':'qa/check.md'}]
+    settings.get_storage_runtime_config.return_value={'storage':{'storage_type':'s3'}}
+    context=ContextVar('worker-test',default={})
+    def run(file_paths):
+        assert context.get()['user_id']=='owner'
+        assert 'embedding_api_key' not in context.get()
+        return '{"success":true,"data":{"updated":1}}'
+    result=IndexingRetryApiHandler(lambda:database,lambda _:repo,lambda:settings,run,context).retry(1,False)
+    assert result['processed']==1
+    settings.get_runtime_config.assert_not_called()
+    settings.get_storage_runtime_config.assert_called_once_with('owner')
+    assert context.get()=={}

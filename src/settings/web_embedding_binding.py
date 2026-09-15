@@ -1,3 +1,5 @@
+import os
+from urllib.parse import urlsplit
 from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, Cookie, HTTPException, Request
@@ -37,7 +39,9 @@ def create_embedding_binding_router(session_store_factory, repository_factory=Em
     def same_origin(request):
         # Cookie-authorized persistent delegation must not be created by another origin.
         origin = request.headers.get('origin')
-        if origin != str(request.base_url).rstrip('/'):
+        callback = urlsplit(os.getenv('KNOWLEDGE_REDIRECT_URI', ''))
+        expected = f'{callback.scheme}://{callback.netloc}' if callback.scheme and callback.netloc else str(request.base_url).rstrip('/')
+        if origin != expected:
             raise HTTPException(403,'Same-origin request required')
 
     @router.get('/api/settings/embedding-binding')

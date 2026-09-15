@@ -1,4 +1,5 @@
 import json
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
@@ -64,7 +65,7 @@ class IndexingRetryApiHandler:
             for owner_id, file_paths in jobs_by_owner.items():
                 settings = self.settings_factory()
                 try:
-                    stored_config = settings.get_runtime_config(owner_id)
+                    stored_config = (settings.get_storage_runtime_config(owner_id) if os.getenv("EMBEDDING_PROVIDER") == "broker" else settings.get_runtime_config(owner_id))
                 finally:
                     settings.db_manager.close()
 
