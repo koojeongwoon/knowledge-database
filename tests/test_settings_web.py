@@ -379,8 +379,9 @@ class SettingsWebTests(unittest.TestCase):
                 os.environ["MCP_PUBLIC_HOST"] = old_mcp
 
     @patch("src.settings.web._authenticated_user", return_value="USER_1")
-    @patch("src.settings.iam_codex_client.IAMCodexClient.start_device_flow")
-    def test_start_openai_device_code_endpoint(self, mock_start, mock_auth):
+    @patch("src.settings.broker_codex_client.BrokerCodexClient.start_device_flow")
+    @patch("src.settings.broker_codex_client.BrokerIdentityRepository.subject_for_owner", return_value="verified-subject")
+    def test_start_openai_device_code_endpoint(self, mock_subject, mock_start, mock_auth):
         self.authenticate()
         mock_start.return_value = {
             "device_code": "dev-code-123",
@@ -395,13 +396,14 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(response.json()["user_code"], "USER-1234")
 
     @patch("src.settings.web._authenticated_user", return_value="USER_1")
-    @patch("src.settings.iam_codex_client.IAMCodexClient.check_device_token")
+    @patch("src.settings.broker_codex_client.BrokerCodexClient.check_device_token")
     @patch("src.settings.service.UserSettingsService.switch_llm_auth_type")
-    def test_poll_openai_device_token_endpoint(self, mock_switch, mock_check, mock_auth):
+    @patch("src.settings.broker_codex_client.BrokerIdentityRepository.subject_for_owner", return_value="verified-subject")
+    def test_poll_openai_device_token_endpoint(self, mock_subject, mock_switch, mock_check, mock_auth):
         self.authenticate()
         # 1. Pending status
         mock_check.return_value = {"status": "PENDING"}
-        pending_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123"})
+        pending_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123", "user_code": "USER-1234"})
         self.assertEqual(pending_resp.status_code, 200)
         self.assertEqual(pending_resp.json()["status"], "pending")
 
@@ -409,10 +411,28 @@ class SettingsWebTests(unittest.TestCase):
         mock_check.return_value = {"status": "COMPLETED"}
         mock_switch.return_value = {"configured": True, "llm_auth_type": "openai_oauth"}
 
-        complete_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123"})
+        complete_resp = self.client.post("/api/settings/openai-oauth/poll", json={"device_code": "dev-code-123", "user_code": "USER-1234"})
         self.assertEqual(complete_resp.status_code, 200)
         self.assertEqual(complete_resp.json()["status"], "complete")
         self.assertEqual(complete_resp.json()["settings"]["llm_auth_type"], "openai_oauth")
+
+    @patch("src.settings.web._authenticated_user", return_value="USER_1")
+    @patch("src.settings.broker_codex_client.BrokerCodexClient.unlink")
+    @patch("src.settings.service.UserSettingsService.switch_llm_auth_type")
+    @patch("src.settings.broker_codex_client.BrokerIdentityRepository.subject_for_owner", return_value="verified-subject")
+    def test_unlink_openai_oauth_removes_broker_credential_and_switches_mode(
+        self, mock_subject, mock_switch, mock_unlink, mock_auth,
+    ):
+        self.authenticate()
+        mock_unlink.return_value = {"unlinked": True}
+        mock_switch.return_value = {"configured": True, "llm_auth_type": "api_key"}
+
+        response = self.client.post("/api/settings/openai-oauth/unlink")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["llm_auth_type"], "api_key")
+        mock_unlink.assert_awaited_once()
+        mock_switch.assert_called_once_with("USER_1", "api_key")
 
     @patch("src.settings.web._authenticated_user", return_value="USER_1")
     @patch("src.settings.service.UserSettingsService.switch_llm_auth_type")
@@ -427,4 +447,3 @@ class SettingsWebTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

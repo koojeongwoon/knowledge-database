@@ -30,7 +30,7 @@ class SwitchAuthTypePayload(BaseModel):
 
 class DeviceCodePollPayload(BaseModel):
     device_code: str = Field(..., min_length=1)
-    user_code: Optional[str] = Field(default=None)
+    user_code: str = Field(..., min_length=1, max_length=128)
 
 
 def create_configuration_router(
@@ -97,13 +97,13 @@ def create_configuration_router(
         authorization: Optional[str] = Header(default=None),
         knowledge_session: Optional[str] = Cookie(default=None),
     ):
-        await authenticate(authorization, knowledge_session)
-        from src.settings.iam_codex_client import IAMCodexClient
-        iam_client = IAMCodexClient()
+        owner_id = await authenticate(authorization, knowledge_session)
+        from src.settings.broker_codex_client import BrokerCodexClient
+        broker_client = BrokerCodexClient(owner_id)
         try:
-            return await iam_client.start_device_flow()
+            return await broker_client.start_device_flow()
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"인증 서버(IAM) 연동 실패: {exc}") from exc
+            raise HTTPException(status_code=502, detail=f"Broker 연동 실패: {exc}") from exc
 
     @router.post("/api/settings/openai-oauth/poll")
     async def poll_openai_device_token(
@@ -112,26 +112,40 @@ def create_configuration_router(
         knowledge_session: Optional[str] = Cookie(default=None),
     ):
         owner_id = await authenticate(authorization, knowledge_session)
-        from src.settings.iam_codex_client import IAMCodexClient
-        iam_client = IAMCodexClient()
+        from src.settings.broker_codex_client import BrokerCodexClient
+        broker_client = BrokerCodexClient(owner_id)
         try:
-            iam_resp = await iam_client.check_device_token(
-                device_code=payload.device_code,
-                user_code=payload.user_code,
-                user_id=owner_id,
-            )
-            if iam_resp.get("status") == "COMPLETED":
+            broker_resp = await broker_client.check_device_token(payload.device_code,payload.user_code)
+            if broker_resp.get("status") == "COMPLETED":
                 service = service_factory()
                 try:
                     saved = service.switch_llm_auth_type(owner_id, "openai_oauth")
                     return {"status": "complete", "settings": saved}
                 finally:
                     service.db_manager.close()
-            elif iam_resp.get("status") == "PENDING":
+            elif broker_resp.get("status") == "PENDING":
                 return {"status": "pending"}
             else:
                 return {"status": "pending"}
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"인증 서버(IAM) 토큰 확인 실패: {exc}") from exc
+            raise HTTPException(status_code=500, detail=f"Broker 토큰 확인 실패: {exc}") from exc
+
+    @router.post("/api/settings/openai-oauth/unlink")
+    async def unlink_openai_oauth(
+        authorization: Optional[str] = Header(default=None),
+        knowledge_session: Optional[str] = Cookie(default=None),
+    ):
+        owner_id = await authenticate(authorization, knowledge_session)
+        from src.settings.broker_codex_client import BrokerCodexClient
+        broker_client = BrokerCodexClient(owner_id)
+        try:
+            await broker_client.unlink()
+            service = service_factory()
+            try:
+                return service.switch_llm_auth_type(owner_id, "api_key")
+            finally:
+                service.db_manager.close()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Broker 연동 해제 실패: {exc}") from exc
 
     return router

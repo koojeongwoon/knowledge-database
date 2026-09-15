@@ -91,10 +91,9 @@ async function startOAuthFlow() {
 
 async function unlinkOAuth() {
   try {
-    const res = await fetch("/api/settings/switch-auth-type", {
+    const res = await fetch("/api/settings/openai-oauth/unlink", {
       method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ llm_auth_type: "api_key" })
+      headers: headers()
     });
     let data;
     try {
@@ -104,7 +103,7 @@ async function unlinkOAuth() {
     }
     if (!res.ok) throw new Error(data.detail || "전환 실패");
     updateAuthStateUI("api_key", false, true);
-    message("API Key 추론 모드로 전환되었습니다.");
+    message("ChatGPT 계정 연동을 해제하고 API Key 추론 모드로 전환했습니다.");
   } catch (e) {
     message(e.message, true);
   }
