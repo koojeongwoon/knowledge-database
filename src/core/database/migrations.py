@@ -956,6 +956,10 @@ def _create_embedding_bindings(cur) -> None:
     """)
 
 
+def _remove_embedding_bindings(cur) -> None:
+    cur.execute('DROP TABLE knowledge_embedding_bindings')
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -980,6 +984,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(21, "add_llm_model_name_to_user_settings", _add_llm_model_name_to_user_settings),
     Migration(22, "create_pg_search_bm25_indexes", _create_pg_search_bm25_indexes),
     Migration(23, "create_embedding_bindings", _create_embedding_bindings),
+    Migration(24, "remove_embedding_bindings", _remove_embedding_bindings),
 )
 
 

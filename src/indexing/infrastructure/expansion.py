@@ -45,7 +45,7 @@ class OpenAIDocumentExpander(BaseDocumentExpander):
             f"Document title: {title}\nDocument description: {description}\n\n{chunks}"
         )
         try:
-            response = self.client.beta.chat.completions.parse(
+            parsed = self.parse(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": "You optimize technical search indexes."},
@@ -54,7 +54,6 @@ class OpenAIDocumentExpander(BaseDocumentExpander):
                 response_format=BatchExpansionResponse,
                 temperature=0.2,
             )
-            parsed = response.choices[0].message.parsed
             if not parsed:
                 return ()
             return tuple(
@@ -72,6 +71,16 @@ class OpenAIDocumentExpander(BaseDocumentExpander):
             return ()
 
 
+    def parse(self, **kwargs):
+        response = self.client.beta.chat.completions.parse(**kwargs)
+        return response.choices[0].message.parsed
+
+
+class BrokerDocumentExpander(OpenAIDocumentExpander):
+    def parse(self, **kwargs):
+        return self.client.parse(**kwargs)
+
+
 def create_document_expander() -> BaseDocumentExpander:
     from src.core.config import DOCUMENT_EXPANSION_ENABLED, current_user_config
 
@@ -79,6 +88,18 @@ def create_document_expander() -> BaseDocumentExpander:
         return NoOpDocumentExpander()
     config = current_user_config.get() or {}
     import os
+    if os.getenv('LLM_PROVIDER') == 'broker':
+        from src.settings.service import UserSettingsService
+        from src.indexing.infrastructure.broker_chat import BrokerStructuredChat
+        owner = config.get('user_id')
+        if not owner or owner == 'SYSTEM':
+            raise ValueError('Verified owner is required for Broker LLM execution')
+        service = UserSettingsService()
+        try:
+            model = service.get_llm_model(owner)
+        finally:
+            service.db_manager.close()
+        return BrokerDocumentExpander(BrokerStructuredChat(owner), model=model)
     if os.getenv('EMBEDDING_PROVIDER') == 'broker' and config.get('user_id'):
         from src.settings.service import UserSettingsService
         service = UserSettingsService()

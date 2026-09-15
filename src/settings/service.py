@@ -267,6 +267,12 @@ class UserSettingsService:
             "updated_at": row[6].isoformat() if len(row) > 6 and row[6] else None,
         }
 
+    def get_llm_model(self, owner_id: str) -> str:
+        with self.db_manager.cursor() as cur:
+            cur.execute('SELECT llm_model_name FROM knowledge_user_settings WHERE owner_id=%s', (owner_id,))
+            row = cur.fetchone()
+        return row[0] if row and row[0] else 'gpt-4o-mini'
+
     def get_storage_runtime_config(self, owner_id: str) -> Dict[str, Any]:
         """Embedding/search context loads storage only, without any provider credential cache."""
         self.initialize()

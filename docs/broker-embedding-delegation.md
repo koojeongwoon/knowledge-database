@@ -6,7 +6,7 @@ MCP authentication supplies the local owner; the background retry queue supplies
 
 `/settings/embedding` and `/api/settings/embedding-binding` are removed. Migration 24 drops the obsolete binding metadata after consumer cutover. The prior 30-day grant has no role in execution. The per-request context freshness limit is automatically generated and requires no user renewal.
 
-Embedding and retry context loads storage fields only. LLM document expansion is the next migration slice. Broker is trusted to perform authenticated provider calls and return results; Knowledge still owns prompts, parsing, indexing and storage.
+Embedding and retry context loads storage fields only. The opt-in `LLM_PROVIDER=broker` structured streaming adapter is implemented and tested. Production retains its current Codex OAuth model until a Codex Broker adapter is ready; the new LLM flag is not enabled. Broker is trusted to perform authenticated provider calls and return results; Knowledge still owns prompts, parsing, indexing and storage.
 
 ## Historical verification of the removed grant design
 
