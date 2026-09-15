@@ -944,6 +944,18 @@ def _create_pg_search_bm25_indexes(cur) -> None:
     """)
 
 
+def _create_embedding_bindings(cur) -> None:
+    cur.execute("""
+        CREATE TABLE knowledge_embedding_bindings (
+            owner_id VARCHAR(255) PRIMARY KEY,
+            grant_id UUID NOT NULL, connection_id UUID NOT NULL,
+            credential_version BIGINT NOT NULL CHECK (credential_version > 0),
+            expires_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -967,6 +979,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(20, "add_llm_auth_and_embedding_settings", _add_llm_auth_and_embedding_settings),
     Migration(21, "add_llm_model_name_to_user_settings", _add_llm_model_name_to_user_settings),
     Migration(22, "create_pg_search_bm25_indexes", _create_pg_search_bm25_indexes),
+    Migration(23, "create_embedding_bindings", _create_embedding_bindings),
 )
 
 

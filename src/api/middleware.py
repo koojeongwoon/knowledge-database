@@ -189,7 +189,7 @@ class MCPAuthMiddleware:
                 from src.settings.service import UserSettingsService
                 settings_service = UserSettingsService()
                 try:
-                    stored_config = settings_service.get_runtime_config(validated_user_id)
+                    stored_config = (settings_service.get_storage_runtime_config(validated_user_id) if os.getenv("EMBEDDING_PROVIDER") == "broker" else settings_service.get_runtime_config(validated_user_id))
                     if stored_config:
                         user_config.update(stored_config)
                 finally:

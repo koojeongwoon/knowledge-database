@@ -1,3 +1,4 @@
+import os
 from typing import Any
 from src.core.config import current_user_config
 from src.core.context import set_current_user_context, reset_current_user_context, UserContext
@@ -9,7 +10,7 @@ def activate_owner_context(owner_id: str):
 
     service = UserSettingsService()
     try:
-        stored_config = service.get_runtime_config(owner_id)
+        stored_config = (service.get_storage_runtime_config(owner_id) if os.getenv("EMBEDDING_PROVIDER") == "broker" else service.get_runtime_config(owner_id))
     finally:
         service.db_manager.close()
     if not stored_config:

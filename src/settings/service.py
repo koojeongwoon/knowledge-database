@@ -267,6 +267,24 @@ class UserSettingsService:
             "updated_at": row[6].isoformat() if len(row) > 6 and row[6] else None,
         }
 
+    def get_storage_runtime_config(self, owner_id: str) -> Dict[str, Any]:
+        """Embedding/search context loads storage only, without any provider credential cache."""
+        self.initialize()
+        with self.db_manager.cursor() as cur:
+            cur.execute("""
+                SELECT storage_type,s3_endpoint_url,s3_bucket_name,
+                       s3_access_key_id_encrypted,s3_secret_access_key_encrypted
+                FROM knowledge_user_settings WHERE owner_id=%s
+            """, (owner_id,))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        return {'storage': {
+            'storage_type':'s3' if row[0]=='r2' else row[0],
+            's3_endpoint_url':row[1],'s3_bucket_name':row[2],
+            's3_access_key_id':self._decrypt(row[3]),'s3_secret_access_key':self._decrypt(row[4]),
+        }}
+
     def get_runtime_config(self, owner_id: str, allow_refresh: bool = True) -> Dict[str, Any]:
         with _runtime_config_cache_lock:
             cached = _runtime_config_cache.get(owner_id)
@@ -296,7 +314,7 @@ class UserSettingsService:
         oauth_access_token = self._decrypt(row[8]) if len(row) > 8 else None
         oauth_refresh_token = self._decrypt(row[9]) if len(row) > 9 else None
         oauth_expires_at = row[10] if len(row) > 10 else None
-        embedding_api_key = (self._decrypt(row[11]) if len(row) > 11 else None) or openai_api_key
+        embedding_api_key = None if os.getenv("EMBEDDING_PROVIDER") == "broker" else ((self._decrypt(row[11]) if len(row) > 11 else None) or openai_api_key)
         llm_model_name = row[12] if len(row) > 12 and row[12] else "gpt-5.6-luna"
 
 
@@ -335,7 +353,9 @@ class UserSettingsService:
                     oauth_access_token = bundle["codex"].get("access_token")
                 if bundle.get("openai_api_key", {}).get("configured"):
                     openai_api_key = bundle["openai_api_key"].get("api_key")
-                if bundle.get("embedding_api_key", {}).get("configured"):
+                if os.getenv("EMBEDDING_PROVIDER") == "broker":
+                    embedding_api_key = None
+                elif bundle.get("embedding_api_key", {}).get("configured"):
                     embedding_api_key = bundle["embedding_api_key"].get("api_key")
                 elif openai_api_key:
                     embedding_api_key = openai_api_key

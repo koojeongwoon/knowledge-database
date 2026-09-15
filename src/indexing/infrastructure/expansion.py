@@ -78,6 +78,14 @@ def create_document_expander() -> BaseDocumentExpander:
     if not DOCUMENT_EXPANSION_ENABLED:
         return NoOpDocumentExpander()
     config = current_user_config.get() or {}
+    import os
+    if os.getenv('EMBEDDING_PROVIDER') == 'broker' and config.get('user_id'):
+        from src.settings.service import UserSettingsService
+        service = UserSettingsService()
+        try:
+            config = service.get_runtime_config(config['user_id'])
+        finally:
+            service.db_manager.close()
     api_key = config.get("llm_bearer_token") or config.get("openai_api_key")
     if not api_key:
         return NoOpDocumentExpander()

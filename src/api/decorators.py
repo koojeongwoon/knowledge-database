@@ -34,7 +34,7 @@ def with_fresh_user_settings(func: Callable[P, R]) -> Callable[P, R]:
 
         service = UserSettingsService()
         try:
-            stored_config = service.get_runtime_config(owner_id)
+            stored_config = (service.get_storage_runtime_config(owner_id) if os.getenv("EMBEDDING_PROVIDER") == "broker" else service.get_runtime_config(owner_id))
         finally:
             service.db_manager.close()
 

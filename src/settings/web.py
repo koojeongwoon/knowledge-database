@@ -121,3 +121,7 @@ settings_app.include_router(create_api_key_router(
 
 
 settings_app.include_router(create_embedding_router(lambda: session_store()))
+
+from src.settings.web_embedding_binding import create_embedding_binding_router
+
+settings_app.include_router(create_embedding_binding_router(lambda: session_store()))

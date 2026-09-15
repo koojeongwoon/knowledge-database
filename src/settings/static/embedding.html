@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Knowledge 임베딩 연결</title>
+<style>body{background:#0b1020;color:#e7edf8;font:16px system-ui;margin:48px auto;padding:24px;max-width:660px}input,button{font:inherit;padding:12px;border-radius:8px;border:1px solid #64748b;margin:8px 0}input[type=text]{width:95%}button{cursor:pointer}pre{white-space:pre-wrap}a{color:#93c5fd}</style>
+<a href="/settings">연결 설정으로 돌아가기</a><h1>Knowledge 임베딩 연결</h1>
+<p>등록한 Broker 연결을 검색과 자동 인덱싱에 사용합니다. API 키 원문은 입력하지 않습니다.</p>
+<form id="form"><label for="connection">Broker 연결 ID</label><input id="connection" type="text" required>
+<label for="version">연결 버전</label><input id="version" type="number" min="1" value="1" required><br>
+<label for="days">사용 허용 기간</label><select id="days"><option value="30">30일</option><option value="7">7일</option><option value="1">1일</option></select>
+<p><label><input id="consent" type="checkbox" required> Knowledge 검색과 자동 인덱싱이 이 연결로 임베딩을 생성하도록 허용합니다. 제공사 사용량이 발생하며 언제든 아래에서 해제할 수 있습니다.</label></p>
+<button type="submit">사용 허용 및 연결</button></form>
+<button id="revoke" type="button">Knowledge 사용 허용 해제</button><pre id="status" role="status"></pre>
+<script>
+const status=document.getElementById('status');
+async function show(){const r=await fetch('/api/settings/embedding-binding');if(r.status===401){location.href='/login';return}const b=await r.json();status.textContent=b?JSON.stringify(b,null,2):'연결된 임베딩 사용 권한이 없습니다.';if(b){document.getElementById('connection').value=b.connection_id;document.getElementById('version').value=b.credential_version}}
+document.getElementById('form').onsubmit=async e=>{e.preventDefault();status.textContent='연결 중…';const r=await fetch('/api/settings/embedding-binding',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_id:document.getElementById('connection').value.trim(),credential_version:Number(document.getElementById('version').value),validity_days:Number(document.getElementById('days').value)})});if(!r.ok){status.textContent='연결 실패 (HTTP '+r.status+')';return}await show()};
+document.getElementById('revoke').onclick=async()=>{const r=await fetch('/api/settings/embedding-binding',{method:'DELETE'});if(!r.ok){status.textContent='해제 실패 (HTTP '+r.status+')';return}await show()};show();
+</script></html>

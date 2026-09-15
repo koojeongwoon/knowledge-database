@@ -57,8 +57,8 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
 
 def _embedding_service():
     if EMBEDDING_PROVIDER == "broker":
-        from src.indexing.infrastructure.broker_embedding import BrokerEmbeddingService
-        return BrokerEmbeddingService(dimension=EMBEDDING_DIM)
+        from src.indexing.infrastructure.broker_embedding import create_delegated_embedding_service
+        return create_delegated_embedding_service(dimension=EMBEDDING_DIM)
     if EMBEDDING_PROVIDER == "openai":
         return OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
     if EMBEDDING_PROVIDER == "bge-m3":

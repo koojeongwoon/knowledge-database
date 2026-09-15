@@ -101,3 +101,57 @@ class BrokerEmbeddingService(BaseEmbeddingService):
             raise
         except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError):
             raise BrokerEmbeddingError("Broker embedding service is unavailable") from None
+
+
+class DelegatedBrokerEmbeddingService(BrokerEmbeddingService):
+    def __init__(self, owner_id, dimension=1536, binding_repository=None, transport=None):
+        from src.settings.embedding_binding import EmbeddingBindingRepository
+        self.owner_id = owner_id
+        self.bindings = binding_repository or EmbeddingBindingRepository()
+        self.dimension = dimension
+        self.transport = transport
+        self.connection_id = 'delegated'
+
+    def _execute(self, texts):
+        binding = self.bindings.get(self.owner_id)
+        if not binding:
+            raise BrokerEmbeddingError('Knowledge embedding delegation is not configured',409)
+        base = os.getenv('CREDENTIAL_BROKER_URL','').rstrip('/')
+        if not base:
+            raise BrokerEmbeddingError('Broker URL is not configured')
+        try:
+            workload = Path(os.getenv('BROKER_WORKLOAD_TOKEN_FILE',
+                '/var/run/secrets/credential-broker/token')).read_text().strip()
+            if not workload:
+                raise BrokerEmbeddingError('Broker workload token is missing')
+            with httpx.Client(timeout=40,follow_redirects=False,transport=self.transport) as client:
+                response = client.post(base+'/v1/delegated-execute',headers={
+                    'Authorization':'Bearer '+workload,
+                },json={
+                    'request_id':str(uuid4()),'grant_id':binding['grant_id'],
+                    'connection_id':binding['connection_id'],'credential_version':binding['credential_version'],
+                    'action':'embedding.create','model':'text-embedding-3-small',
+                    'input':texts,'dimensions':self.dimension,
+                })
+                if response.status_code != 200:
+                    raise BrokerEmbeddingError('Broker delegated embedding denied or failed',response.status_code)
+                body = response.json()
+                vectors = body['data']['embeddings']
+                if body.get('success') is not True or len(vectors) != len(texts) or any(
+                    len(v)!=self.dimension or any(type(x) not in (float,int) or not math.isfinite(x) for x in v)
+                    for v in vectors
+                ):
+                    raise BrokerEmbeddingError('Broker returned invalid embeddings')
+                return vectors
+        except BrokerEmbeddingError:
+            raise
+        except (httpx.HTTPError,OSError,ValueError,KeyError,TypeError):
+            raise BrokerEmbeddingError('Broker embedding service is unavailable') from None
+
+
+def create_delegated_embedding_service(dimension=1536):
+    from src.core.config import current_user_config
+    owner = (current_user_config.get() or {}).get('user_id')
+    if not owner or owner == 'SYSTEM':
+        raise BrokerEmbeddingError('Verified Knowledge owner context is required',401)
+    return DelegatedBrokerEmbeddingService(owner,dimension)
