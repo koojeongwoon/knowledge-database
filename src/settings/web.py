@@ -21,6 +21,7 @@ from src.settings.oauth_session import (
     OAuthSessionError,
     session_store,
 )
+from src.settings.web_embeddings import create_embedding_router
 from src.settings.web_auth import create_auth_router
 from src.settings.web_api_keys import create_api_key_router
 from src.settings.web_configuration import create_configuration_router
@@ -117,3 +118,6 @@ settings_app.include_router(create_api_key_router(
     lambda authorization, session_token: _authenticated_auth_id(authorization, session_token),
     lambda: ApiKeyService(),
 ))
+
+
+settings_app.include_router(create_embedding_router(lambda: session_store()))
