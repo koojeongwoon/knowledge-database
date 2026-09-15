@@ -96,10 +96,10 @@ def create_document_expander() -> BaseDocumentExpander:
             raise ValueError('Verified owner is required for Broker LLM execution')
         service = UserSettingsService()
         try:
-            model = service.get_llm_model(owner)
+            preferences = service.get_llm_preferences(owner)
         finally:
             service.db_manager.close()
-        return BrokerDocumentExpander(BrokerStructuredChat(owner), model=model)
+        return BrokerDocumentExpander(BrokerStructuredChat(owner,auth_type=preferences['auth_type']), model=preferences['model'])
     if os.getenv('EMBEDDING_PROVIDER') == 'broker' and config.get('user_id'):
         from src.settings.service import UserSettingsService
         service = UserSettingsService()

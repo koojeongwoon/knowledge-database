@@ -67,7 +67,7 @@ class UserSettingsService:
 
     def save(self, owner_id: str, values: Dict[str, Any]) -> Dict[str, Any]:
         existing = self._get_row(owner_id)
-        
+
         # LLM & OAuth & Embedding fields
         llm_auth_type = values.get("llm_auth_type") or (existing[7] if existing and existing[7] else "api_key")
         if llm_auth_type not in ("api_key", "openai_oauth"):
@@ -194,28 +194,36 @@ class UserSettingsService:
         iam_openai_configured = False
         iam_embedding_configured = False
 
-        try:
-            from src.settings.iam_codex_client import IAMCodexClient
-            iam_client = IAMCodexClient()
-            lookup_user_id = self._resolve_iam_user_id(owner_id)
+        if os.getenv('LLM_PROVIDER')=='broker':
+            from src.indexing.infrastructure.broker_chat import BrokerStructuredChat
+            try:
+                iam_codex_linked=BrokerStructuredChat(owner_id).linked()
+            except Exception:
+                # Unknown status is not permission to retrieve a credential bundle.
+                iam_codex_linked=False
+        else:
+            try:
+                from src.settings.iam_codex_client import IAMCodexClient
+                iam_client = IAMCodexClient()
+                lookup_user_id = self._resolve_iam_user_id(owner_id)
 
-            # 1. AI 자격증명 번들 조회 (Codex 토큰 발급 가능 여부 및 API Key)
-            bundle = iam_client.get_ai_bundle(user_id=lookup_user_id)
-            if bundle:
-                if bundle.get("codex", {}).get("linked"):
-                    iam_codex_linked = True
-                if bundle.get("openai_api_key", {}).get("configured"):
-                    iam_openai_configured = True
-                if bundle.get("embedding_api_key", {}).get("configured"):
-                    iam_embedding_configured = True
+                # 1. AI 자격증명 번들 조회 (Codex 토큰 발급 가능 여부 및 API Key)
+                bundle = iam_client.get_ai_bundle(user_id=lookup_user_id)
+                if bundle:
+                    if bundle.get("codex", {}).get("linked"):
+                        iam_codex_linked = True
+                    if bundle.get("openai_api_key", {}).get("configured"):
+                        iam_openai_configured = True
+                    if bundle.get("embedding_api_key", {}).get("configured"):
+                        iam_embedding_configured = True
 
-            # 2. 번들에서 linked가 아니더라도, IAM 서버에 Codex 계정이 등록되어 있는지 status API로 추가 확인
-            if not iam_codex_linked:
-                status_res = iam_client.get_status(user_id=lookup_user_id)
-                if status_res and (status_res.get("user_linked") or status_res.get("org_linked")):
-                    iam_codex_linked = True
-        except Exception as exc:
-            print(f"Warning: Failed to check IAM Codex/Credentials status: {exc}")
+                # 2. 번들에서 linked가 아니더라도, IAM 서버에 Codex 계정이 등록되어 있는지 status API로 추가 확인
+                if not iam_codex_linked:
+                    status_res = iam_client.get_status(user_id=lookup_user_id)
+                    if status_res and (status_res.get("user_linked") or status_res.get("org_linked")):
+                        iam_codex_linked = True
+            except Exception as exc:
+                print(f"Warning: Failed to check IAM Codex/Credentials status: {exc}")
 
         if not row:
             return {
@@ -267,6 +275,13 @@ class UserSettingsService:
             "updated_at": row[6].isoformat() if len(row) > 6 and row[6] else None,
         }
 
+    def get_llm_preferences(self, owner_id: str) -> Dict[str, str]:
+        with self.db_manager.cursor() as cur:
+            cur.execute('SELECT llm_model_name,llm_auth_type FROM knowledge_user_settings WHERE owner_id=%s',(owner_id,))
+            row=cur.fetchone()
+        return {'model':row[0] if row and row[0] else 'gpt-4o-mini',
+                'auth_type':row[1] if row and row[1] else 'api_key'}
+
     def get_llm_model(self, owner_id: str) -> str:
         with self.db_manager.cursor() as cur:
             cur.execute('SELECT llm_model_name FROM knowledge_user_settings WHERE owner_id=%s', (owner_id,))
@@ -292,6 +307,11 @@ class UserSettingsService:
         }}
 
     def get_runtime_config(self, owner_id: str, allow_refresh: bool = True) -> Dict[str, Any]:
+        if os.getenv('LLM_PROVIDER')=='broker':
+            preferences=self.get_llm_preferences(owner_id)
+            return self.get_storage_runtime_config(owner_id) | {
+                'llm_model_name':preferences['model'],'llm_auth_type':preferences['auth_type']}
+
         with _runtime_config_cache_lock:
             cached = _runtime_config_cache.get(owner_id)
         if cached is not None:

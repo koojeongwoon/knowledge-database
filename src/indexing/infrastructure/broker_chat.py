@@ -23,7 +23,8 @@ def strict_schema(model):
 
 
 class BrokerStructuredChat:
-    def __init__(self,owner_id,identity_repository=None,transport=None):
+    def __init__(self,owner_id,identity_repository=None,transport=None,auth_type="api_key"):
+        self.auth_type=auth_type
         self.subject=(identity_repository or BrokerIdentityRepository()).subject_for_owner(owner_id)
         self.transport=transport
 
@@ -34,7 +35,8 @@ class BrokerStructuredChat:
             workload=Path(os.getenv('BROKER_WORKLOAD_TOKEN_FILE','/var/run/secrets/credential-broker/token')).read_text().strip()
             if not workload:raise BrokerEmbeddingError('Broker workload token missing')
             payload={'subject':self.subject,'issued_at':datetime.now(timezone.utc).isoformat(),
-                'request_id':str(uuid4()),'model':model,'messages':messages,'temperature':temperature,
+                'request_id':str(uuid4()),'model':model,'messages':messages,'auth_type':self.auth_type,
+                'temperature':None if self.auth_type=='openai_oauth' else temperature,
                 'max_completion_tokens':4096,'action':'llm.chat','response_format':{
                     'type':'json_schema','json_schema':{'name':response_format.__name__,
                     'strict':True,'schema':strict_schema(response_format)}}}
@@ -62,3 +64,16 @@ class BrokerStructuredChat:
         except BrokerEmbeddingError:raise
         except (httpx.HTTPError,OSError,ValueError,KeyError,TypeError):
             raise BrokerEmbeddingError('Broker LLM service unavailable') from None
+
+    def linked(self):
+        base=os.getenv('CREDENTIAL_BROKER_URL','').rstrip('/')
+        if not base:raise BrokerEmbeddingError('Broker URL is not configured')
+        try:
+            token=Path(os.getenv('BROKER_WORKLOAD_TOKEN_FILE','/var/run/secrets/credential-broker/token')).read_text().strip()
+            with httpx.Client(timeout=35,follow_redirects=False,transport=self.transport) as client:
+                response=client.post(base+'/v1/workload/codex/status',headers={'Authorization':'Bearer '+token},
+                    json={'subject':self.subject,'issued_at':datetime.now(timezone.utc).isoformat()})
+            if response.status_code!=200:raise BrokerEmbeddingError('Broker connection status unavailable')
+            return response.json().get('linked') is True
+        except (httpx.HTTPError,OSError,ValueError):
+            raise BrokerEmbeddingError('Broker connection status unavailable') from None

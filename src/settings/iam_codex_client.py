@@ -25,6 +25,8 @@ class IAMCodexClient:
         """
         IAM 중앙 인증 서버에서 유저/조직의 AI 자격증명 번들(Codex Token + OpenAI Key + Embedding Key)을 원스톱 조회합니다.
         """
+        if os.getenv('LLM_PROVIDER') == 'broker':
+            return None
         params = {}
         if user_id:
             params["user_id"] = user_id
@@ -45,6 +47,8 @@ class IAMCodexClient:
         """
         비동기 방식으로 AI 자격증명 번들을 원스톱 조회합니다.
         """
+        if os.getenv('LLM_PROVIDER') == 'broker':
+            return None
         params = {}
         if user_id:
             params["user_id"] = user_id
@@ -65,6 +69,8 @@ class IAMCodexClient:
         """
         동기 방식으로 IAM 서버에서 유효한 코덱스 액세스 토큰을 조회합니다.
         """
+        if os.getenv('LLM_PROVIDER') == 'broker':
+            return None
         params = {}
         if user_id:
             params["user_id"] = user_id
@@ -86,6 +92,8 @@ class IAMCodexClient:
         """
         동기 방식으로 IAM 서버에서 코덱스 연동 상태(user_linked, org_linked, scope)를 조회합니다.
         """
+        if os.getenv('LLM_PROVIDER') == 'broker':
+            return None
         params = {}
         if user_id:
             params["user_id"] = user_id
@@ -143,6 +151,8 @@ class IAMCodexClient:
         """
         비동기 방식으로 IAM 서버에서 유효한 코덱스 액세스 토큰을 조회합니다.
         """
+        if os.getenv('LLM_PROVIDER') == 'broker':
+            return None
         params = {}
         if user_id:
             params["user_id"] = user_id
