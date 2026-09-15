@@ -11,6 +11,8 @@ def _valid_claims(**overrides):
         "email": "user@example.com",
         "client_id": auth.KNOWLEDGE_CLIENT_ID,
         "tenant_id": auth.KNOWLEDGE_TENANT_ID,
+        "scope": auth.MCP_DELEGATION_SCOPE,
+        "act": {"sub": auth.MCP_DELEGATION_ACTOR_CLIENT_ID},
         **overrides,
     }
 
@@ -56,3 +58,24 @@ def test_verification_rejects_wrong_service_or_identity_claims(monkeypatch, clai
     with patch.object(auth.jwt, "decode", return_value=claims):
         with pytest.raises(error):
             auth.verify_auth_token("signed-token")
+
+
+@pytest.mark.parametrize(
+    ("claims", "error"),
+    [
+        (_valid_claims(act={"sub": "another-gateway"}), auth.GatewayActorMismatchError),
+        (_valid_claims(act=None), auth.GatewayActorMismatchError),
+        (_valid_claims(scope="openid profile"), auth.DelegationScopeMismatchError),
+        (_valid_claims(scope=["mcp"]), auth.DelegationScopeMismatchError),
+    ],
+)
+def test_gateway_delegation_requires_actor_and_mcp_scope(monkeypatch, claims, error):
+    monkeypatch.setattr(auth, "verify_auth_token", lambda _token: claims)
+    with pytest.raises(error):
+        auth.verify_gateway_delegation_token("signed-token")
+
+
+def test_gateway_delegation_accepts_verified_user_context(monkeypatch):
+    claims = _valid_claims()
+    monkeypatch.setattr(auth, "verify_auth_token", lambda _token: claims)
+    assert auth.verify_gateway_delegation_token("signed-token") == claims

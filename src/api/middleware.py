@@ -6,10 +6,13 @@ import base64
 from datetime import datetime, timezone
 
 import httpx
+import jwt
 
 from src.core.cache.factory import WikiCacheManager
 from src.core.config import current_user_config
 from src.core.logging.audit import log_audit
+from src.api_keys.auth import verify_gateway_delegation_token
+from src.api_keys.service import ApiKeyService
 
 # 추상화된 공용 캐시 매니저 획득 (Wiki Cache 인스턴스 연동)
 cache_manager = WikiCacheManager()
@@ -126,15 +129,8 @@ def _extract_user_config(headers: dict) -> dict:
 
 
 def _request_user_config(headers: dict, user_id: str) -> dict:
-    """인증 사용자는 토큰 식별자만 유지하고 자격증명 헤더는 신뢰하지 않습니다."""
-    header_config = _extract_user_config(headers)
-    if user_id != "SYSTEM":
-        return {
-            "api_key": header_config.get("api_key"),
-            "user_id": user_id,
-        }
-    header_config["user_id"] = user_id
-    return header_config
+    """Keep only the verified local owner; never retain the delegation token."""
+    return {"user_id": user_id}
 
 class MCPAuthMiddleware:
     """
@@ -162,18 +158,19 @@ class MCPAuthMiddleware:
 
         # ─── 인증 검증 (POST /mcp 실제 요청에 대해서만 수행) ───
         validated_user_id = "SYSTEM"
-        if AUTH_SERVER_URL and path in ("/mcp",) and method == "POST":
+        if path == "/mcp" and method == "POST":
             auth_header = headers.get("authorization", "")
             if not auth_header.startswith("Bearer "):
                 await _send_json_error(send, 401, "Missing or invalid Authorization header")
                 return
 
             token = auth_header.split(" ", 1)[1]
-            result = await _validate_api_key_cached(token)
-            if result is None:
-                await _send_json_error(send, 401, "Unauthorized or invalid API Key")
+            try:
+                claims = verify_gateway_delegation_token(token)
+                validated_user_id = ApiKeyService().get_or_create_user(claims["sub"])
+            except (jwt.PyJWTError, KeyError, ValueError):
+                await _send_json_error(send, 401, "Unauthorized delegation token")
                 return
-            validated_user_id = result.get("user_id", "SYSTEM")
 
         # ─── SSL Offloading (X-Forwarded-Proto에 따른 지능형 판단) ───
         forwarded_proto = headers.get("x-forwarded-proto", "http")

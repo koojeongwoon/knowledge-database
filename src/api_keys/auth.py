@@ -10,6 +10,10 @@ AUTH_SERVER_URL = os.getenv(
 ).rstrip("/")
 AUTH_TOKEN_ISSUER = os.getenv("AUTH_TOKEN_ISSUER", AUTH_SERVER_URL)
 KNOWLEDGE_CLIENT_ID = os.getenv("KNOWLEDGE_CLIENT_ID", "knowledge-service")
+MCP_DELEGATION_SCOPE = os.getenv("MCP_DELEGATION_SCOPE", "mcp")
+MCP_DELEGATION_ACTOR_CLIENT_ID = os.getenv(
+    "MCP_DELEGATION_ACTOR_CLIENT_ID", "cli_ab3d5bb39f894dff"
+)
 
 
 class KnowledgeClientMismatchError(jwt.InvalidTokenError):
@@ -25,6 +29,14 @@ class MissingTokenSubjectError(jwt.InvalidTokenError):
 
 
 class MissingTokenEmailError(jwt.InvalidTokenError):
+    pass
+
+
+class GatewayActorMismatchError(jwt.InvalidTokenError):
+    pass
+
+
+class DelegationScopeMismatchError(jwt.InvalidTokenError):
     pass
 
 
@@ -58,4 +70,16 @@ def verify_auth_token(token: str) -> dict:
         raise MissingTokenSubjectError("Token subject is missing")
     if not claims.get("email"):
         raise MissingTokenEmailError("Token standard OIDC email claim is missing")
+    return claims
+
+
+def verify_gateway_delegation_token(token: str) -> dict:
+    """Verify a short-lived IAM token delegated by the configured Tools Gateway."""
+    claims = verify_auth_token(token)
+    actor = claims.get("act")
+    if not isinstance(actor, dict) or actor.get("sub") != MCP_DELEGATION_ACTOR_CLIENT_ID:
+        raise GatewayActorMismatchError("Token actor is not the configured Tools Gateway")
+    scope = claims.get("scope")
+    if not isinstance(scope, str) or MCP_DELEGATION_SCOPE not in scope.split():
+        raise DelegationScopeMismatchError("Token does not grant MCP access")
     return claims

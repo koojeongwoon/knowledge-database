@@ -25,7 +25,7 @@ class DatabaseBackedUserConfigTests(unittest.TestCase):
             "x-s3-secret-access-key": "header-secret-key",
         }, "USER_1")
 
-        self.assertEqual(config, {"api_key": "app-token", "user_id": "USER_1"})
+        self.assertEqual(config, {"user_id": "USER_1"})
 
     def test_authenticated_user_without_db_storage_fails_closed(self):
         token = current_user_config.set({"api_key": "app-token", "user_id": "USER_1"})
