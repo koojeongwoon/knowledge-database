@@ -79,3 +79,20 @@ def test_session_endpoint_passes_proof_without_loading_credential_settings():
         response=client.post('/api/settings/embeddings',json=body)
         assert response.json()=={'embeddings':[[0.1]],'dimensions':1}
         assert 'proof' not in response.text
+
+
+def test_session_endpoint_preserves_connection_denial_status():
+    store = SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(access_token='user-proof')))
+    def fail(texts):
+        raise BrokerEmbeddingError('Broker embedding request failed (HTTP 409)', status_code=409)
+    app = FastAPI()
+    app.include_router(create_embedding_router(
+        lambda: store, lambda **kwargs: SimpleNamespace(embed_batch=fail),
+    ))
+    with TestClient(app) as client:
+        client.cookies.set('knowledge_session', 'session')
+        response = client.post('/api/settings/embeddings', json={
+            'connection_id': str(uuid4()), 'credential_version': 3, 'input': ['text'],
+        })
+        assert response.status_code == 409
+        assert response.json() == {'detail': 'Broker embedding request failed'}

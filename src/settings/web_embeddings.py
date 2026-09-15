@@ -36,8 +36,8 @@ def create_embedding_router(session_store_factory, embedding_factory=BrokerEmbed
         )
         try:
             vectors = await run_in_threadpool(service.embed_batch, payload.input)
-        except BrokerEmbeddingError:
-            raise HTTPException(502, "Broker embedding request failed") from None
+        except BrokerEmbeddingError as exc:
+            raise HTTPException(exc.status_code, "Broker embedding request failed") from None
         return {"embeddings": vectors, "dimensions": payload.dimensions}
 
     return router

@@ -14,7 +14,9 @@ broker_subject_token = contextvars.ContextVar("broker_subject_token", default=No
 
 
 class BrokerEmbeddingError(RuntimeError):
-    pass
+    def __init__(self, message, status_code=502):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class BrokerEmbeddingService(BaseEmbeddingService):
@@ -81,7 +83,10 @@ class BrokerEmbeddingService(BaseEmbeddingService):
                     "model": "text-embedding-3-small", "input": texts, "dimensions": self.dimension,
                 })
                 if response.status_code != 200:
-                    raise BrokerEmbeddingError(f"Broker embedding request failed (HTTP {response.status_code})")
+                    raise BrokerEmbeddingError(
+                        f"Broker embedding request failed (HTTP {response.status_code})",
+                        status_code=response.status_code,
+                    )
                 payload = response.json()
                 if payload.get("success") is not True:
                     raise BrokerEmbeddingError("Broker embedding request failed")
