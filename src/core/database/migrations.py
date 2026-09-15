@@ -957,7 +957,10 @@ def _create_embedding_bindings(cur) -> None:
 
 
 def _remove_embedding_bindings(cur) -> None:
-    cur.execute('DROP TABLE knowledge_embedding_bindings')
+    # Shared PostgreSQL preloads AGE even where its extension is not installed.
+    # Its DROP hook fails on the absent ag_catalog schema. Retire the data while
+    # retaining an empty, unused legacy table; no runtime code reads it.
+    cur.execute('DELETE FROM knowledge_embedding_bindings')
 
 
 MIGRATIONS: tuple[Migration, ...] = (

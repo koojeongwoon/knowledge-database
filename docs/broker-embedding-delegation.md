@@ -26,3 +26,7 @@ The following describes the previous deployment, not the current authorization c
 - New Pod digests match CI: Broker `sha256:fd32236350362d5a25b9694b9eec77cfb7c10d9b08ba649d137e5b6677805d55`; Knowledge `sha256:ec950f781c5a9feda0cbd7cf599a7cfa1f8be31926a53bfaf991336e00d3bca3`. Deployments ready; Argo applications Synced/Healthy.
 - Broker tests: 126 passed, 6 opt-in DB tests skipped; separately migration scenario passed and five DB integration tests passed. Knowledge focused suite 84 passed; final origin/retry changes passed a 38-test subset including nine delegation tests. A broad Knowledge run had 289 passed, 6 skipped, and one asynchronous audit-file timing failure while its DB handler was blocked on an unavailable local DB; that unchanged guardrail file passed all 3 tests separately. This is not a claim of a clean full-suite run.
 - Recent Broker/Knowledge logs contained zero provider-key and Transit-ciphertext pattern matches. Embedding does not load/cache provider credentials; optional document-expansion LLM and other legacy AI bundle consumers remain Phase 4 scope.
+
+### Production migration compatibility
+
+Migration 24 deletes all legacy binding rows and retains the unused table. The shared PostgreSQL server preloads AGE without installing it in knowledge_db, causing DROP TABLE to fail on missing ag_catalog. No runtime route or repository reads the retained table.
