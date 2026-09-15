@@ -3,15 +3,6 @@ from typing import Awaitable, Callable, Optional, Type
 from fastapi import APIRouter, Cookie, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from src.settings.openai_oauth import (
-    OpenAIOAuthClient,
-    OpenAIOAuthDenied,
-    OpenAIOAuthError,
-    OpenAIOAuthExpired,
-    OpenAIOAuthSlowDown,
-)
-
-
 class SettingsPayload(BaseModel):
     llm_auth_type: Optional[str] = Field(default=None, pattern="^(api_key|openai_oauth)$")
     llm_model_name: Optional[str] = Field(default=None, max_length=100)

@@ -909,9 +909,6 @@ def _add_llm_auth_and_embedding_settings(cur) -> None:
     cur.execute("""
         ALTER TABLE knowledge_user_settings
             ADD COLUMN IF NOT EXISTS llm_auth_type VARCHAR(32) NOT NULL DEFAULT 'api_key',
-            ADD COLUMN IF NOT EXISTS openai_oauth_access_token_encrypted TEXT,
-            ADD COLUMN IF NOT EXISTS openai_oauth_refresh_token_encrypted TEXT,
-            ADD COLUMN IF NOT EXISTS openai_oauth_expires_at BIGINT,
             ADD COLUMN IF NOT EXISTS embedding_api_key_encrypted TEXT;
     """)
     cur.execute("""
@@ -963,6 +960,15 @@ def _remove_embedding_bindings(cur) -> None:
     cur.execute('DELETE FROM knowledge_embedding_bindings')
 
 
+def _drop_legacy_openai_oauth_token_columns(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_user_settings
+            DROP COLUMN IF EXISTS openai_oauth_access_token_encrypted,
+            DROP COLUMN IF EXISTS openai_oauth_refresh_token_encrypted,
+            DROP COLUMN IF EXISTS openai_oauth_expires_at;
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -988,6 +994,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(22, "create_pg_search_bm25_indexes", _create_pg_search_bm25_indexes),
     Migration(23, "create_embedding_bindings", _create_embedding_bindings),
     Migration(24, "remove_embedding_bindings", _remove_embedding_bindings),
+    Migration(25, "drop_legacy_openai_oauth_token_columns", _drop_legacy_openai_oauth_token_columns),
 )
 
 

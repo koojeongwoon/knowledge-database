@@ -1,14 +1,10 @@
 import os
-import time
 import unittest
-from unittest.mock import MagicMock, patch
+from contextlib import contextmanager
+from unittest.mock import patch
 
-from src.core.config import current_user_config
-from src.indexing.domain.embedding import OpenAIEmbeddingService
-from src.indexing.infrastructure.expansion import create_document_expander
 from src.settings import service as settings_service_module
-from src.settings.openai_oauth import OpenAITokenSet
-from src.settings.service import UserSettingsService, invalidate_user_settings_cache
+from src.settings.service import UserSettingsService
 
 
 class FakeCursor:
@@ -17,77 +13,43 @@ class FakeCursor:
         self._last_result = None
 
     def execute(self, query, params=None):
-        query_str = " ".join(query.split()).lower()
-        if query_str.startswith("select"):
-            owner_id = params[0] if params else "USER_1"
-            row = self.storage.get(owner_id)
+        normalized = " ".join(query.split()).lower()
+        if normalized.startswith("select"):
+            row = self.storage.get(params[0] if params else "USER_1")
+            if row and "select llm_model_name,llm_auth_type" in normalized:
+                row = (row[9], row[7])
+            elif row and "select llm_model_name from" in normalized:
+                row = (row[9],)
             self._last_result = row
-        elif query_str.startswith("insert into knowledge_user_settings"):
-            # owner_id, openai_key, storage_type, s3_endpoint, s3_bucket, access_key, secret_key,
-            # llm_auth_type, oauth_access, oauth_refresh, oauth_expires_at, embedding_key, llm_model_name
+            return
+        if normalized.startswith("insert into knowledge_user_settings"):
             owner_id = params[0]
-            openai_key = params[1]
-            storage_type = params[2]
-            s3_endpoint = params[3]
-            s3_bucket = params[4]
-            access_key = params[5]
-            secret_key = params[6]
-            llm_auth_type = params[7]
-            oauth_access = params[8]
-            oauth_refresh = params[9]
-            oauth_expires_at = params[10]
-            embedding_key = params[11]
-            llm_model_name = params[12] if len(params) > 12 else "gpt-5.6-luna"
-
             self.storage[owner_id] = (
-                openai_key,
-                storage_type,
-                s3_endpoint,
-                s3_bucket,
-                access_key,
-                secret_key,
-                None,  # updated_at
-                llm_auth_type,
-                oauth_access,
-                oauth_refresh,
-                oauth_expires_at,
-                embedding_key,
-                llm_model_name,
+                params[1], params[2], params[3], params[4], params[5], params[6],
+                None, params[7], params[8], params[9],
             )
 
     def fetchone(self):
         return self._last_result
 
     def fetchall(self):
-        return [(v,) for v in range(1, 25)]
-
+        return [(version,) for version in range(1, 26)]
 
 
 class FakeDbManager:
     def __init__(self):
         self.storage = {}
 
+    @contextmanager
     def cursor(self):
-        from contextlib import contextmanager
+        yield FakeCursor(self.storage)
 
-        @contextmanager
-        def _cursor_ctx():
-            yield FakeCursor(self.storage)
-
-        return _cursor_ctx()
-
+    @contextmanager
     def transaction(self):
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _tx_ctx():
-            yield FakeCursor(self.storage)
-
-        return _tx_ctx()
+        yield FakeCursor(self.storage)
 
     def close(self):
         pass
-
 
 
 class LLMAuthSettingsTests(unittest.TestCase):
@@ -95,17 +57,23 @@ class LLMAuthSettingsTests(unittest.TestCase):
         self.db = FakeDbManager()
         self.service = UserSettingsService(db_manager=self.db)
         os.environ["SETTINGS_ENCRYPTION_KEY"] = "test-encryption-master-key-1234567890"
+        os.environ.pop("EMBEDDING_PROVIDER", None)
         settings_service_module._runtime_config_cache.clear()
+        self.linked = patch(
+            "src.indexing.infrastructure.broker_chat.BrokerStructuredChat.linked",
+            return_value=False,
+        )
+        self.linked.start()
 
     def tearDown(self):
+        self.linked.stop()
+        os.environ.pop("EMBEDDING_PROVIDER", None)
         settings_service_module._runtime_config_cache.clear()
 
-    def test_save_and_switch_auth_type(self):
-        # 1. Initially save with API Key
+    def test_saves_llm_preference_without_local_oauth_tokens(self):
         saved = self.service.save("USER_1", {
-            "llm_auth_type": "api_key",
-            "openai_api_key": "sk-proj-test-1234",
-            "embedding_api_key": "sk-proj-embed-5678",
+            "llm_auth_type": "openai_oauth",
+            "llm_model_name": "gpt-5.6-luna",
             "storage_type": "s3",
             "s3_endpoint_url": "https://s3.example.com",
             "s3_bucket_name": "my-bucket",
@@ -113,130 +81,33 @@ class LLMAuthSettingsTests(unittest.TestCase):
             "s3_secret_access_key": "secret-key",
         })
 
-        self.assertEqual(saved["llm_auth_type"], "api_key")
-        self.assertTrue(saved["openai_configured"])
-        self.assertFalse(saved["openai_oauth_configured"])
-        self.assertTrue(saved["embedding_configured"])
-
+        self.assertEqual(saved["llm_auth_type"], "openai_oauth")
+        self.assertEqual(self.service.get_llm_preferences("USER_1"), {
+            "model": "gpt-5.6-luna",
+            "auth_type": "openai_oauth",
+        })
         runtime = self.service.get_runtime_config("USER_1")
-        self.assertEqual(runtime["llm_auth_type"], "api_key")
-        self.assertEqual(runtime["openai_api_key"], "sk-proj-test-1234")
-        self.assertEqual(runtime["llm_bearer_token"], "sk-proj-test-1234")
-        self.assertEqual(runtime["embedding_api_key"], "sk-proj-embed-5678")
+        self.assertNotIn("openai_oauth_access_token", runtime)
+        self.assertNotIn("openai_oauth_refresh_token", runtime)
+        self.assertNotIn("llm_bearer_token", runtime)
 
-        # 2. Save OAuth tokens (e.g. from ChatGPT Plus OAuth login)
-        oauth_saved = self.service.save_openai_oauth_tokens(
-            "USER_1",
-            access_token="oauth-access-token-123",
-            refresh_token="oauth-refresh-token-456",
-            expires_at=int(time.time()) + 3600,
-        )
-
-        self.assertEqual(oauth_saved["llm_auth_type"], "openai_oauth")
-        self.assertTrue(oauth_saved["openai_oauth_configured"])
-
-        invalidate_user_settings_cache("USER_1")
-        runtime_oauth = self.service.get_runtime_config("USER_1")
-        self.assertEqual(runtime_oauth["llm_auth_type"], "openai_oauth")
-        self.assertEqual(runtime_oauth["llm_bearer_token"], "oauth-access-token-123")
-        # Embedding API key is preserved
-        self.assertEqual(runtime_oauth["embedding_api_key"], "sk-proj-embed-5678")
-
-        # 3. Switch back to api_key mode
-        switched = self.service.switch_llm_auth_type("USER_1", "api_key")
-        self.assertEqual(switched["llm_auth_type"], "api_key")
-
-        invalidate_user_settings_cache("USER_1")
-        runtime_switched = self.service.get_runtime_config("USER_1")
-        self.assertEqual(runtime_switched["llm_auth_type"], "api_key")
-        self.assertEqual(runtime_switched["llm_bearer_token"], "sk-proj-test-1234")
-
-    @patch("src.settings.openai_oauth.OpenAIOAuthClient.refresh_access_token_sync")
-    def test_auto_token_refresh_when_expired(self, mock_refresh_sync):
-        mock_refresh_sync.return_value = OpenAITokenSet(
-            access_token="refreshed-access-token-999",
-            refresh_token="refreshed-refresh-token-888",
-            expires_at=int(time.time()) + 3600,
-        )
-
-        # Save an OAuth token that expires in 10 seconds (near expiry < 60s)
+    def test_broker_embedding_mode_does_not_decrypt_provider_keys(self):
         self.service.save("USER_1", {
-            "llm_auth_type": "openai_oauth",
-            "openai_oauth_access_token": "expired-access-token",
-            "openai_oauth_refresh_token": "valid-refresh-token",
-            "openai_oauth_expires_at": int(time.time()) + 10,
-            "storage_type": "s3",
-            "s3_endpoint_url": "https://s3.example.com",
-            "s3_bucket_name": "my-bucket",
-            "s3_access_key_id": "access-key",
-            "s3_secret_access_key": "secret-key",
-        })
-
-        invalidate_user_settings_cache("USER_1")
-        runtime = self.service.get_runtime_config("USER_1")
-
-        mock_refresh_sync.assert_called_once_with("valid-refresh-token")
-        self.assertEqual(runtime["openai_oauth_access_token"], "refreshed-access-token-999")
-        self.assertEqual(runtime["llm_bearer_token"], "refreshed-access-token-999")
-
-    @patch("openai.OpenAI")
-    def test_embedding_service_prioritizes_embedding_api_key(self, mock_openai):
-        # When embedding_api_key is set in config
-        token = current_user_config.set({
-            "user_id": "USER_1",
-            "llm_auth_type": "openai_oauth",
-            "llm_bearer_token": "oauth-chatgpt-token",
             "openai_api_key": "general-api-key",
             "embedding_api_key": "dedicated-embedding-key",
-        })
-        try:
-            service = OpenAIEmbeddingService()
-            mock_openai.assert_called_with(api_key="dedicated-embedding-key")
-        finally:
-            current_user_config.reset(token)
-
-    @patch("openai.OpenAI")
-    def test_embedding_service_falls_back_to_openai_api_key(self, mock_openai):
-        # When embedding_api_key is not set, falls back to openai_api_key
-        token = current_user_config.set({
-            "user_id": "USER_1",
-            "openai_api_key": "fallback-api-key",
-        })
-        try:
-            service = OpenAIEmbeddingService()
-            mock_openai.assert_called_with(api_key="fallback-api-key")
-        finally:
-            current_user_config.reset(token)
-
-    @patch("openai.OpenAI")
-    def test_document_expander_uses_llm_bearer_token(self, mock_openai):
-        token = current_user_config.set({
-            "user_id": "USER_1",
-            "llm_bearer_token": "oauth-bearer-token",
-            "llm_model_name": "gpt-5.6-luna",
-        })
-        try:
-            with patch("src.core.config.DOCUMENT_EXPANSION_ENABLED", True):
-                expander = create_document_expander()
-                self.assertTrue(expander.enabled)
-                self.assertEqual(expander.model, "gpt-5.6-luna")
-                mock_openai.assert_called_with(api_key="oauth-bearer-token")
-        finally:
-            current_user_config.reset(token)
-
-    def test_save_and_retrieve_llm_model_name(self):
-        saved = self.service.save("USER_1", {
-            "llm_auth_type": "openai_oauth",
-            "llm_model_name": "gpt-5.6-luna",
-            "s3_endpoint_url": "https://r2.example.com",
+            "storage_type": "s3",
+            "s3_endpoint_url": "https://s3.example.com",
             "s3_bucket_name": "my-bucket",
             "s3_access_key_id": "access-key",
             "s3_secret_access_key": "secret-key",
         })
-        self.assertEqual(saved["llm_model_name"], "gpt-5.6-luna")
+        os.environ["EMBEDDING_PROVIDER"] = "broker"
+        settings_service_module._runtime_config_cache.clear()
 
         runtime = self.service.get_runtime_config("USER_1")
-        self.assertEqual(runtime["llm_model_name"], "gpt-5.6-luna")
+
+        self.assertIsNone(runtime["openai_api_key"])
+        self.assertIsNone(runtime["embedding_api_key"])
 
 
 if __name__ == "__main__":

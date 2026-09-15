@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from src.indexing.domain.expansion import NoOpDocumentExpander
-from src.indexing.infrastructure.expansion import OpenAIDocumentExpander
+from src.indexing.infrastructure.expansion import BrokerDocumentExpander
 
 
 def test_noop_expander_is_disabled_and_returns_immutable_empty_result() -> None:
@@ -12,7 +12,7 @@ def test_noop_expander_is_disabled_and_returns_immutable_empty_result() -> None:
     assert expander.expand_batch("title", "description", [(0, "content")]) == ()
 
 
-def test_openai_expander_translates_structured_output_to_search_text() -> None:
+def test_broker_expander_translates_structured_output_to_search_text() -> None:
     client = MagicMock()
     parsed = SimpleNamespace(
         expansions=[
@@ -23,11 +23,9 @@ def test_openai_expander_translates_structured_output_to_search_text() -> None:
             )
         ]
     )
-    client.beta.chat.completions.parse.return_value = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
-    )
+    client.parse.return_value = parsed
 
-    result = OpenAIDocumentExpander(client).expand_batch(
+    result = BrokerDocumentExpander(client).expand_batch(
         "문서", "설명", [(2, "본문")]
     )
 

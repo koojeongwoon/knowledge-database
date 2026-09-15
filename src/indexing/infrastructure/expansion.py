@@ -1,4 +1,4 @@
-from typing import Any, Sequence
+from typing import Sequence
 
 from pydantic import BaseModel, Field
 
@@ -20,8 +20,8 @@ class BatchExpansionResponse(BaseModel):
     expansions: list[SingleChunkExpansion]
 
 
-class OpenAIDocumentExpander(BaseDocumentExpander):
-    def __init__(self, client: Any, model: str = "gpt-4o-mini") -> None:
+class BrokerDocumentExpander(BaseDocumentExpander):
+    def __init__(self, client, model: str = "gpt-4o-mini") -> None:
         self.client = client
         self.model = model
 
@@ -72,12 +72,6 @@ class OpenAIDocumentExpander(BaseDocumentExpander):
 
 
     def parse(self, **kwargs):
-        response = self.client.beta.chat.completions.parse(**kwargs)
-        return response.choices[0].message.parsed
-
-
-class BrokerDocumentExpander(OpenAIDocumentExpander):
-    def parse(self, **kwargs):
         return self.client.parse(**kwargs)
 
 
@@ -87,35 +81,17 @@ def create_document_expander() -> BaseDocumentExpander:
     if not DOCUMENT_EXPANSION_ENABLED:
         return NoOpDocumentExpander()
     config = current_user_config.get() or {}
-    import os
-    if os.getenv('LLM_PROVIDER') == 'broker':
-        from src.settings.service import UserSettingsService
-        from src.indexing.infrastructure.broker_chat import BrokerStructuredChat
-        owner = config.get('user_id')
-        if not owner or owner == 'SYSTEM':
-            raise ValueError('Verified owner is required for Broker LLM execution')
-        service = UserSettingsService()
-        try:
-            preferences = service.get_llm_preferences(owner)
-        finally:
-            service.db_manager.close()
-        return BrokerDocumentExpander(BrokerStructuredChat(owner,auth_type=preferences['auth_type']), model=preferences['model'])
-    if os.getenv('EMBEDDING_PROVIDER') == 'broker' and config.get('user_id'):
-        from src.settings.service import UserSettingsService
-        service = UserSettingsService()
-        try:
-            config = service.get_runtime_config(config['user_id'])
-        finally:
-            service.db_manager.close()
-    api_key = config.get("llm_bearer_token") or config.get("openai_api_key")
-    if not api_key:
-        return NoOpDocumentExpander()
-    model = config.get("llm_model_name") or ("gpt-5.6-luna" if config.get("llm_auth_type") == "openai_oauth" else "gpt-4o-mini")
+    from src.settings.service import UserSettingsService
+    from src.indexing.infrastructure.broker_chat import BrokerStructuredChat
+    owner = config.get('user_id')
+    if not owner or owner == 'SYSTEM':
+        raise ValueError('Verified owner is required for Broker LLM execution')
+    service = UserSettingsService()
     try:
-        from openai import OpenAI
-
-        return OpenAIDocumentExpander(OpenAI(api_key=api_key), model=model)
-    except Exception as exc:
-        print(f"Warning: Failed to initialize document expansion: {exc}")
-        return NoOpDocumentExpander()
-
+        preferences = service.get_llm_preferences(owner)
+    finally:
+        service.db_manager.close()
+    return BrokerDocumentExpander(
+        BrokerStructuredChat(owner, auth_type=preferences['auth_type']),
+        model=preferences['model'],
+    )
