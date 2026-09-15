@@ -37,7 +37,7 @@ class BrokerStructuredChat:
             payload={'subject':self.subject,'issued_at':datetime.now(timezone.utc).isoformat(),
                 'request_id':str(uuid4()),'model':model,'messages':messages,'auth_type':self.auth_type,
                 'temperature':None if self.auth_type=='openai_oauth' else temperature,
-                'max_completion_tokens':4096,'action':'llm.chat','response_format':{
+                'max_completion_tokens':None if self.auth_type=='openai_oauth' else 4096,'action':'llm.chat','response_format':{
                     'type':'json_schema','json_schema':{'name':response_format.__name__,
                     'strict':True,'schema':strict_schema(response_format)}}}
             content=[];done=False;finish=None;size=0

@@ -55,7 +55,7 @@ def test_oauth_preserves_model_and_omits_unsupported_temperature(client_env):
     def handler(req):
         body=json.loads(req.content)
         assert body['auth_type']=='openai_oauth' and body['model']=='gpt-5.6-luna'
-        assert body['temperature'] is None
+        assert body['temperature'] is None and body['max_completion_tokens'] is None
         return httpx.Response(200,text=stream_response('{"expansions":[]}'))
     client=BrokerStructuredChat('owner',client_env,httpx.MockTransport(handler),auth_type='openai_oauth')
     assert client.parse('gpt-5.6-luna',[{'role':'user','content':'x'}],BatchExpansionResponse,.2).expansions==[]
