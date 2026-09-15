@@ -960,12 +960,21 @@ def _remove_embedding_bindings(cur) -> None:
     cur.execute('DELETE FROM knowledge_embedding_bindings')
 
 
-def _drop_legacy_openai_oauth_token_columns(cur) -> None:
+def _clear_legacy_openai_oauth_token_columns(cur) -> None:
     cur.execute("""
-        ALTER TABLE knowledge_user_settings
-            DROP COLUMN IF EXISTS openai_oauth_access_token_encrypted,
-            DROP COLUMN IF EXISTS openai_oauth_refresh_token_encrypted,
-            DROP COLUMN IF EXISTS openai_oauth_expires_at;
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'knowledge_user_settings'
+                  AND column_name = 'openai_oauth_access_token_encrypted'
+            ) THEN
+                UPDATE knowledge_user_settings
+                SET openai_oauth_access_token_encrypted = NULL,
+                    openai_oauth_refresh_token_encrypted = NULL,
+                    openai_oauth_expires_at = NULL;
+            END IF;
+        END $$;
     """)
 
 
@@ -994,7 +1003,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(22, "create_pg_search_bm25_indexes", _create_pg_search_bm25_indexes),
     Migration(23, "create_embedding_bindings", _create_embedding_bindings),
     Migration(24, "remove_embedding_bindings", _remove_embedding_bindings),
-    Migration(25, "drop_legacy_openai_oauth_token_columns", _drop_legacy_openai_oauth_token_columns),
+    Migration(25, "clear_legacy_openai_oauth_token_columns", _clear_legacy_openai_oauth_token_columns),
 )
 
 
