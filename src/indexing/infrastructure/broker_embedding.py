@@ -1,154 +1,44 @@
-"""Knowledge embedding adapter: IAM token exchange -> Broker -> vectors only."""
-import contextvars
-import math
-import os
-from pathlib import Path
-from uuid import uuid4
-
-import httpx
-
+"""Knowledge builds OpenAI embedding requests; Broker only authenticates transport."""
+import json,math
 from src.indexing.domain.embedding import BaseEmbeddingService
+from src.settings.broker_identity import BrokerIdentityRepository
+from .broker_http import BrokerHttpClient,BrokerTransportError
+BrokerEmbeddingError=BrokerTransportError
 
-# Separate request-local authentication proof. Never put this into settings caches.
-broker_subject_token = contextvars.ContextVar("broker_subject_token", default=None)
+class WorkloadBrokerEmbeddingService(BaseEmbeddingService):
+    def __init__(self,owner_id,dimension=1536,identity_repository=None,transport=None,connection_id=None,credential_version=None):
+        self.subject=(identity_repository or BrokerIdentityRepository()).subject_for_owner(owner_id)
+        self.dimension=dimension;self.connection_id=connection_id;self.credential_version=credential_version
+        self.client=BrokerHttpClient(self.subject,transport)
 
+    def get_dimension(self):return self.dimension
+    def embed_text(self,text):return self.embed_batch([text])[0]
 
-class BrokerEmbeddingError(RuntimeError):
-    def __init__(self, message, status_code=502):
-        super().__init__(message)
-        self.status_code = status_code
-
-
-class BrokerEmbeddingService(BaseEmbeddingService):
-    def __init__(self, dimension=1536, connection_id=None, credential_version=None,
-                 subject_token_supplier=None, transport=None):
-        self.dimension = dimension
-        self.connection_id = connection_id or os.getenv("BROKER_EMBEDDING_CONNECTION_ID", "")
-        self.credential_version = credential_version or int(os.getenv("BROKER_EMBEDDING_CREDENTIAL_VERSION", "1"))
-        self.subject_token_supplier = subject_token_supplier or broker_subject_token.get
-        self.transport = transport
-
-    def get_dimension(self):
-        return self.dimension
-
-    def embed_text(self, text):
-        return self.embed_batch([text])[0]
-
-    def embed_batch(self, texts, batch_size=100):
-        if not 1 <= batch_size <= 100:
-            raise ValueError("Broker embedding batch size must be between 1 and 100")
-        if not texts:
-            return []
-        if not self.connection_id:
-            raise BrokerEmbeddingError("Broker embedding connection is not configured")
-        output = []
-        for offset in range(0, len(texts), batch_size):
-            output.extend(self._execute(texts[offset:offset + batch_size]))
+    def embed_batch(self,texts,batch_size=100):
+        if not 1<=batch_size<=100:raise ValueError('Embedding batch size must be between 1 and 100')
+        if any(not text.strip() or len(text)>16000 for text in texts):raise BrokerEmbeddingError('Invalid embedding input',400)
+        output=[]
+        for offset in range(0,len(texts),batch_size):output.extend(self._execute(texts[offset:offset+batch_size]))
         return output
 
-    def _execute(self, texts):
-        subject_token = self.subject_token_supplier()
-        if not subject_token:
-            raise BrokerEmbeddingError("An IAM user token is required for Broker embeddings")
-        iam_url = os.getenv("IAM_SERVER_URL", "").rstrip("/")
-        endpoint = f"{iam_url}/api/auth/oauth2/token"
-        tenant_id = os.getenv("IAM_TENANT_ID", "ten_9664c024babc4110")
-        base_url = os.getenv("CREDENTIAL_BROKER_URL", "").rstrip("/")
-        if not iam_url or not base_url:
-            raise BrokerEmbeddingError("Broker authentication is not configured")
-        try:
-            with httpx.Client(timeout=40, follow_redirects=False, transport=self.transport) as client:
-                exchanged = client.post(endpoint, data={
-                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
-                    "subject_token": subject_token,
-                    "client_id": "credential-broker",
-                    "requested_target_tenant": tenant_id,
-                })
-                if exchanged.status_code != 200:
-                    raise BrokerEmbeddingError("Broker token exchange was rejected")
-                iam_token = exchanged.json()["access_token"]
-                # Read on each call so projected token rotation takes effect immediately.
-                workload_token = Path(os.getenv(
-                    "BROKER_WORKLOAD_TOKEN_FILE", "/var/run/secrets/credential-broker/token",
-                )).read_text().strip()
-                if not workload_token or not isinstance(iam_token, str) or not iam_token:
-                    raise BrokerEmbeddingError("Broker authentication token is missing")
-                response = client.post(f"{base_url}/v1/execute", headers={
-                    "Authorization": f"Bearer {iam_token}",
-                    "X-Workload-Authorization": f"Bearer {workload_token}",
-                }, json={
-                    "request_id": str(uuid4()), "connection_id": self.connection_id,
-                    "credential_version": self.credential_version, "action": "embedding.create",
-                    "model": "text-embedding-3-small", "input": texts, "dimensions": self.dimension,
-                })
-                if response.status_code != 200:
-                    raise BrokerEmbeddingError(
-                        f"Broker embedding request failed (HTTP {response.status_code})",
-                        status_code=response.status_code,
-                    )
-                payload = response.json()
-                if payload.get("success") is not True:
-                    raise BrokerEmbeddingError("Broker embedding request failed")
-                vectors = payload["data"]["embeddings"]
-                if len(vectors) != len(texts) or any(
-                    len(v) != self.dimension or any(type(x) not in (float, int) or not math.isfinite(x) for x in v)
-                    for v in vectors
-                ):
-                    raise BrokerEmbeddingError("Broker returned invalid embedding dimensions")
+    def _execute(self,texts):
+        if sum(map(len,texts))>100000:raise BrokerEmbeddingError('Embedding batch too large',400)
+        payload={'model':'text-embedding-3-small','input':texts,'dimensions':self.dimension,'encoding_format':'float'}
+        with self.client.stream('api-key','openai','POST','https://api.openai.com/v1/embeddings',
+                headers={'content-type':'application/json'},content=json.dumps(payload).encode(),
+                connection_id=self.connection_id,credential_version=self.credential_version) as response:
+            if response.status_code!=200:raise BrokerEmbeddingError('OpenAI embedding request failed',response.status_code)
+            try:
+                response.read();body=response.json();data=sorted(body['data'],key=lambda item:item['index'])
+                if [item['index'] for item in data]!=list(range(len(texts))):raise ValueError()
+                vectors=[item['embedding'] for item in data]
+                if any(len(v)!=self.dimension or any(type(x) not in (float,int) or not math.isfinite(x) for x in v) for v in vectors):raise ValueError()
                 return vectors
-        except BrokerEmbeddingError:
-            raise
-        except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError):
-            raise BrokerEmbeddingError("Broker embedding service is unavailable") from None
-
-
-class WorkloadBrokerEmbeddingService(BrokerEmbeddingService):
-    def __init__(self, owner_id, dimension=1536, identity_repository=None, transport=None):
-        from src.settings.broker_identity import BrokerIdentityRepository
-        self.subject = (identity_repository or BrokerIdentityRepository()).subject_for_owner(owner_id)
-        self.dimension = dimension
-        self.transport = transport
-        self.connection_id = 'automatic-user-selection'
-
-    def _execute(self, texts):
-        from datetime import datetime, timezone
-        base = os.getenv('CREDENTIAL_BROKER_URL','').rstrip('/')
-        if not base:
-            raise BrokerEmbeddingError('Broker URL is not configured')
-        try:
-            workload = Path(os.getenv('BROKER_WORKLOAD_TOKEN_FILE',
-                '/var/run/secrets/credential-broker/token')).read_text().strip()
-            if not workload:
-                raise BrokerEmbeddingError('Broker workload token is missing')
-            with httpx.Client(timeout=40,follow_redirects=False,transport=self.transport) as client:
-                response = client.post(base+'/v1/workload/embeddings',headers={
-                    'Authorization':'Bearer '+workload,
-                },json={
-                    'request_id':str(uuid4()),'subject':self.subject,
-                    'issued_at':datetime.now(timezone.utc).isoformat(),
-                    'action':'embedding.create','model':'text-embedding-3-small',
-                    'input':texts,'dimensions':self.dimension,
-                })
-                if response.status_code != 200:
-                    raise BrokerEmbeddingError('Broker user embedding denied or failed',response.status_code)
-                body = response.json()
-                vectors = body['data']['embeddings']
-                if body.get('success') is not True or len(vectors) != len(texts) or any(
-                    len(v)!=self.dimension or any(type(x) not in (float,int) or not math.isfinite(x) for x in v)
-                    for v in vectors
-                ):
-                    raise BrokerEmbeddingError('Broker returned invalid embeddings')
-                return vectors
-        except BrokerEmbeddingError:
-            raise
-        except (httpx.HTTPError,OSError,ValueError,KeyError,TypeError):
-            raise BrokerEmbeddingError('Broker embedding service is unavailable') from None
+            except (ValueError,KeyError,TypeError):raise BrokerEmbeddingError('Invalid OpenAI embedding response') from None
 
 
 def create_user_embedding_service(dimension=1536):
     from src.core.config import current_user_config
-    owner = (current_user_config.get() or {}).get('user_id')
-    if not owner or owner == 'SYSTEM':
-        raise BrokerEmbeddingError('Verified Knowledge owner context is required',401)
+    owner=(current_user_config.get() or {}).get('user_id')
+    if not owner or owner=='SYSTEM':raise BrokerEmbeddingError('Verified Knowledge owner context required',401)
     return WorkloadBrokerEmbeddingService(owner,dimension)

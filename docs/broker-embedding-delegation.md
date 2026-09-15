@@ -4,9 +4,9 @@ The former Knowledge-specific consent and 30-day grant design has been removed. 
 
 MCP authentication supplies the local owner; the background retry queue supplies the persisted job owner. `BrokerIdentityRepository` maps that owner to its IAM subject using the authoritative user table, with no subject/tenant header or argument override. The projected workload token authenticates Knowledge/worker to Broker. Broker’s explicit issuer policy fixes the tenant and allowed actions and automatically selects that user’s active connection. Missing or ambiguous connections fail closed; shared-tenant keys are not substituted.
 
-`/settings/embedding` and `/api/settings/embedding-binding` are removed. Migration 24 drops the obsolete binding metadata after consumer cutover. The prior 30-day grant has no role in execution. The per-request context freshness limit is automatically generated and requires no user renewal.
+`/settings/embedding` and `/api/settings/embedding-binding` are removed. Migration 24 deletes obsolete binding rows after consumer cutover; the unused table is retained for shared PostgreSQL compatibility. The prior 30-day grant has no role in execution. The per-request context freshness limit is automatically generated and requires no user renewal.
 
-Embedding and retry context loads storage fields only. The opt-in `LLM_PROVIDER=broker` structured streaming adapter is implemented and tested. Production retains its current Codex OAuth model until a Codex Broker adapter is ready; the new LLM flag is not enabled. Broker is trusted to perform authenticated provider calls and return results; Knowledge still owns prompts, parsing, indexing and storage.
+Embedding and retry context loads storage fields only. `EMBEDDING_PROVIDER=broker` and `LLM_PROVIDER=broker` use the owner identity without provider credential caches. Knowledge constructs OpenAI/Codex requests and parses provider responses through the [authenticated transport contract](integration/broker-embedding.md). Codex OAuth and the user's model preference are preserved. Broker handles authentication, credential destination and transport; there is no provider business-operation or model catalog on this path.
 
 ## Historical verification of the removed grant design
 

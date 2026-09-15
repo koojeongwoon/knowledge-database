@@ -120,4 +120,4 @@ settings_app.include_router(create_api_key_router(
 ))
 
 
-settings_app.include_router(create_embedding_router(lambda: session_store()))
+settings_app.include_router(create_embedding_router(_authenticated_user))

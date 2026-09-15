@@ -1,48 +1,30 @@
-# Credential Broker embedding slice
+# Knowledge authenticated provider transport
 
-The new `/api/settings/embeddings` POST route uses the existing Knowledge IAM login
-session. It exchanges the server-held IAM access token for the Broker client, reads
-the projected Kubernetes workload token, and calls Broker `/v1/execute`. The route
-never calls `UserSettingsService` or IAM's AI credential bundle and returns only vectors.
+Knowledge owns provider HTTP requests and response interpretation. Broker verifies the personal connection and injects authentication before forwarding raw bytes. The common contract is documented in Broker `docs/implementation/authenticated-http-contract.md`.
 
-Required non-secret runtime settings:
+- OpenAI embeddings: Knowledge constructs `/v1/embeddings` JSON and validates vector indexes, count, dimensions and finite values.
+- OpenAI API-key chat: Knowledge constructs Chat Completions JSON/strict schema and parses its SSE stream.
+- Codex OAuth: Knowledge constructs Codex Responses input/instructions/strict schema and parses Responses SSE. The user's `gpt-5.6-luna` preference is retained; unsupported temperature/output-token fields are omitted.
+- Broker endpoints are `/v1/proxy/api-key` and `/v1/proxy/oauth`, with raw provider body and base64 JSON `X-Broker-Request` metadata. No provider key/token is returned to Knowledge.
 
-- `IAM_SERVER_URL`: IAM root URL (the exchange path is `/api/auth/oauth2/token`).
-- `IAM_TENANT_ID`: defaults to shared tenant `ten_9664c024babc4110`.
-- `CREDENTIAL_BROKER_URL`: internal Credential Broker origin.
-- `BROKER_WORKLOAD_TOKEN_FILE`: defaults to `/var/run/secrets/credential-broker/token`.
+## Identity and runtime
 
-Request body: `connection_id` (UUID), `credential_version` (positive integer),
-`input` (1–100 text strings), and optional `dimensions` (1–1536, default 1536).
-The enabled model is `text-embedding-3-small`. The IAM session must be authorized
-for the Broker service. Broker enforces actual connection ownership and version;
-Knowledge never derives ownership from the supplied connection ID.
+`BrokerIdentityRepository` maps the authenticated local owner to persisted IAM `sub_val`. Browser routes authenticate the existing Knowledge session; MCP uses its authenticated owner; workers use the persisted job owner. Missing identity fails closed. Client-provided subject/tenant overrides and shared-tenant credential fallback are not accepted.
 
-`BrokerEmbeddingService` implements the existing embedding service interface and
-is wired for the opt-in `EMBEDDING_PROVIDER=broker` factory setting. Factory callers
-also require `BROKER_EMBEDDING_CONNECTION_ID`, `BROKER_EMBEDDING_CREDENTIAL_VERSION`,
-and the separate request-local `broker_subject_token` context. Do not set this
-provider globally until MCP and indexing jobs carry a verified IAM delegation.
-A Knowledge API key, database owner ID, or provider key is not a substitute.
-Missing IAM proof fails closed without a direct OpenAI fallback.
+Required non-secret settings:
 
-Provider calls are not retried automatically. Knowledge issues one request UUID per
-batch. Broker persists admission and permits a successful replay with the same
-request UUID; uncertain/failed duplicate requests are blocked. A new Knowledge call
-is a new logical request and can incur another charge after an uncertain outcome.
+- `CREDENTIAL_BROKER_URL`: internal Broker origin.
+- `BROKER_WORKLOAD_TOKEN_FILE`: projected, rotating Broker-audience Kubernetes token.
+- `EMBEDDING_PROVIDER=broker` and `LLM_PROVIDER=broker`.
 
-Validation: 66 focused tests passed, including Broker client/session and denial-status
-regression tests. Production commit `3974214` was deployed via CI run `34938354222`.
-On 2026-09-15, the real Knowledge IAM session -> Broker -> OpenAI path returned
-HTTP 200 with one finite 1536-dimensional vector. The previously revoked test
-connection returned JSON HTTP 409, with a Broker DENIED audit and no execution
-admission. The newly registered connection remains ACTIVE at version 1.
+Broker must first enable server profiles `openai` and `codex` and explicit `http.forward` issuer policy for Knowledge and its indexing worker. No per-service connection approval or 30-day grant is needed. Historical action labels on the personal connection are not business-operation filters on this new transport; service business authorization remains required.
 
-Final successful request: `41170f5b-976a-49ce-b48e-037d2bf9e1c6` (6 tokens).
-Final denied request: `2d22f886-e485-4e90-8757-be0960ef109d`.
-Runtime image digest: `sha256:daa3130d8275147aebb7e3668c2bdaba79b639e786a9f664dce66b7232f42eac`.
-The image matched CI and Argo CD reported Synced/Healthy.
+`POST /api/settings/embeddings` retains `connection_id`, positive `credential_version`, `input` and optional `dimensions` (1–1536). The existing session supplies the owner; Broker checks connection ownership and version. Factory callers use the current owner context and automatic unique personal connection selection; no extra connection environment settings or user token exchange are needed for execution.
 
-Existing MCP/worker embedding paths and legacy LLM credential caches remain on
-their prior settings; this verifies the explicit IAM-session route, not a global
-consumer cutover.
+`BrokerHttpClient` reads the workload token on each attempt, uses fresh request UUIDs, and distinguishes Broker errors from provider HTTP errors by Broker's response-source marker. Embeddings are never automatically retried. Codex generation opts into one repeat only after a provider 401 and successful Broker authentication refresh. Uncertain failures and other provider errors are not retried. Truncated streams are rejected by Knowledge's provider parser.
+
+OAuth link/refresh/unlink and credential custody currently remain in IAM behind the Broker-only personal adapter. Removing all legacy IAM raw credential APIs is a subsequent migration, not claimed by this consumer cutover.
+
+## Verification
+
+Local focused suite: 63 passing tests covering raw provider requests, preserved OAuth/model, strict response parsing, user mapping, workload rotation, bounded opt-in authentication retry, no credential-cache reads, browser denial status and document indexing/expansion consumers. Production evidence is recorded in Broker's authenticated proxy implementation plan after rollout.

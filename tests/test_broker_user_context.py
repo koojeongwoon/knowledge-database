@@ -1,4 +1,4 @@
-import json
+import base64,json
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -24,13 +24,15 @@ def test_workload_embedding_uses_identity_without_grant_or_provider_key(monkeypa
     repo=SimpleNamespace(subject_for_owner=Mock(return_value='verified-sub'))
     calls=[]
     def handler(req):
-        assert req.url.path=='/v1/workload/embeddings'
+        assert req.url.path=='/v1/proxy/api-key'
         assert req.headers['authorization']=='Bearer '+token.read_text()
-        body=json.loads(req.content)
+        body=json.loads(base64.b64decode(req.headers['x-broker-request']))
         assert body['subject']=='verified-sub'
+        assert body['url']=='https://api.openai.com/v1/embeddings'
+        assert json.loads(req.content)['model']=='text-embedding-3-small'
         assert not {'grant_id','connection_id','credential_version','tenant_id','api_key'} & body.keys()
         calls.append(body)
-        return httpx.Response(200,json={'success':True,'data':{'embeddings':[[.1]]}})
+        return httpx.Response(200,headers={'x-broker-response-source':'upstream'},json={'data':[{'index':0,'embedding':[.1]}]})
     service=WorkloadBrokerEmbeddingService('local-owner',1,repo,httpx.MockTransport(handler))
     assert service.embed_text('one')==[.1]
     token.write_text('workload-two')
