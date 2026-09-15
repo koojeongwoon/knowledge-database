@@ -31,7 +31,18 @@ batch. Broker persists admission and permits a successful replay with the same
 request UUID; uncertain/failed duplicate requests are blocked. A new Knowledge call
 is a new logical request and can incur another charge after an uncertain outcome.
 
-Validation: 65 focused tests passed, including 4 new Broker client/session tests.
-These use mocked HTTP responses. Actual provider success, production deployment,
-and revoked-connection E2E remain pending. Existing MCP/worker embedding paths and
-legacy LLM credential caches remain on their prior settings.
+Validation: 66 focused tests passed, including Broker client/session and denial-status
+regression tests. Production commit `3974214` was deployed via CI run `34938354222`.
+On 2026-09-15, the real Knowledge IAM session -> Broker -> OpenAI path returned
+HTTP 200 with one finite 1536-dimensional vector. The previously revoked test
+connection returned JSON HTTP 409, with a Broker DENIED audit and no execution
+admission. The newly registered connection remains ACTIVE at version 1.
+
+Final successful request: `41170f5b-976a-49ce-b48e-037d2bf9e1c6` (6 tokens).
+Final denied request: `2d22f886-e485-4e90-8757-be0960ef109d`.
+Runtime image digest: `sha256:daa3130d8275147aebb7e3668c2bdaba79b639e786a9f664dce66b7232f42eac`.
+The image matched CI and Argo CD reported Synced/Healthy.
+
+Existing MCP/worker embedding paths and legacy LLM credential caches remain on
+their prior settings; this verifies the explicit IAM-session route, not a global
+consumer cutover.
