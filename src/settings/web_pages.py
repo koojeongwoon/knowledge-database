@@ -31,7 +31,6 @@ def create_page_router(
         return route
 
     for path, filename in {
-        "/settings/embedding": "embedding.html",
         "/settings": "index.html", "/settings/edit": "edit.html", "/dashboard": "dashboard.html",
         "/documents": "documents.html", "/inbox": "inbox.html", "/learning": "learning.html",
         "/search-feedback": "feedback.html", "/search-feedback/{search_id}": "search-graph.html",

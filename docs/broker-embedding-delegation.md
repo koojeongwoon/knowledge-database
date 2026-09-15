@@ -1,14 +1,16 @@
-# Broker embedding delegation
+# User-owned Broker embedding execution
 
-`/settings/embedding` authorizes the current IAM user’s Broker connection for Knowledge search and automatic indexing for 1, 7, or 30 days. Knowledge stores only connection/version/grant metadata in `knowledge_embedding_bindings` (migration 23). No external API key is entered or retrieved for embedding.
+The former Knowledge-specific consent and 30-day grant design has been removed. The registered key remains USER-owned within its IAM tenant and is usable through the owner’s services without another connection step.
 
-Set `EMBEDDING_PROVIDER=broker` only after active owners have authorized their bindings. Unconfigured, expired, revoked, or rotated bindings fail closed. Both the MCP factory and indexing factory capture the verified local owner and use `/v1/delegated-execute` with the workload’s projected Broker-audience token. Each batch rereads binding metadata and the token; no IAM or external provider key enters the embedding request.
+MCP authentication supplies the local owner; the background retry queue supplies the persisted job owner. `BrokerIdentityRepository` maps that owner to its IAM subject using the authoritative user table, with no subject/tenant header or argument override. The projected workload token authenticates Knowledge/worker to Broker. Broker’s explicit issuer policy fixes the tenant and allowed actions and automatically selects that user’s active connection. Missing or ambiguous connections fail closed; shared-tenant keys are not substituted.
 
-The consent page requires an IAM session and same-origin writes. Concurrent binding changes return 409. Rebinding revokes old permission first; a failed replacement requires retry. Use “Knowledge 사용 허용 해제” to revoke the grant without revoking the original Broker connection.
+`/settings/embedding` and `/api/settings/embedding-binding` are removed. Migration 24 drops the obsolete binding metadata after consumer cutover. The prior 30-day grant has no role in execution. The per-request context freshness limit is automatically generated and requires no user renewal.
 
-Search and indexing embedding configuration loads storage fields only. Optional document expansion still uses the legacy LLM settings path; migrating those credentials is separate work.
+Embedding and retry context loads storage fields only. LLM document expansion is the next migration slice. Broker is trusted to perform authenticated provider calls and return results; Knowledge still owns prompts, parsing, indexing and storage.
 
-Tests: `python -m pytest -q tests/test_embedding_delegation.py tests/test_broker_embedding.py tests/test_architecture_boundaries.py tests/test_database_migrations.py tests/test_llm_auth_settings.py tests/test_document_expansion.py tests/test_settings_web.py tests/test_scoped_indexing.py tests/test_file_indexing_executor.py tests/test_mcp_tool_contract.py`.
+## Historical verification of the removed grant design
+
+The following describes the previous deployment, not the current authorization contract.
 
 ## Live verification — 2026-09-15
 

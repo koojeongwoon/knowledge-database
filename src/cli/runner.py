@@ -11,8 +11,8 @@ from src.cli.context import activate_owner_context, deactivate_owner_context
 def get_embedding_service():
     """설정된 EMBEDDING_PROVIDER에 따라 알맞은 임베딩 서비스 구현체를 리턴합니다."""
     if EMBEDDING_PROVIDER == "broker":
-        from src.indexing.infrastructure.broker_embedding import create_delegated_embedding_service
-        return create_delegated_embedding_service(dimension=EMBEDDING_DIM)
+        from src.indexing.infrastructure.broker_embedding import create_user_embedding_service
+        return create_user_embedding_service(dimension=EMBEDDING_DIM)
     if EMBEDDING_PROVIDER == "openai":
         from src.indexing.domain.embedding import OpenAIEmbeddingService
         return OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
