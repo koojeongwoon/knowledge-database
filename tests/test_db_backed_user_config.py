@@ -1,7 +1,9 @@
+import json
 import os
 import unittest
 from unittest.mock import patch
 
+from src.api.agent_tool import retrieve_wiki_knowledge
 from src.api.middleware import _request_user_config
 from src.api.decorators import with_fresh_user_settings
 from src.core.config import current_user_config
@@ -26,6 +28,21 @@ class DatabaseBackedUserConfigTests(unittest.TestCase):
         }, "USER_1")
 
         self.assertEqual(config, {"user_id": "USER_1"})
+
+    @patch("src.api.agent_tool.RetrievalApiHandler.search", return_value="result")
+    @patch("src.settings.service.UserSettingsService")
+    def test_retrieval_uses_verified_owner_for_search_and_audit_identity(
+        self, settings_service_class, search
+    ):
+        settings_service_class.return_value.get_storage_runtime_config.return_value = {}
+        token = current_user_config.set({"user_id": "USER_1"})
+        try:
+            response = json.loads(retrieve_wiki_knowledge("query", limit=3))
+        finally:
+            current_user_config.reset(token)
+
+        self.assertTrue(response["success"])
+        search.assert_called_once_with("query", 3, "USER_1", "USER_1")
 
     def test_authenticated_user_without_db_storage_fails_closed(self):
         token = current_user_config.set({"api_key": "app-token", "user_id": "USER_1"})

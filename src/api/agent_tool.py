@@ -42,8 +42,8 @@ def retrieve_wiki_knowledge(query: str, limit: int = 5) -> str:
 
     # 사용자 식별용 Config 추출
     user_config = current_user_config.get() or {}
-    user_id = user_config.get("api_key", "SYSTEM")
     owner_id = user_config.get("user_id", "SYSTEM")
+    user_id = owner_id
 
     return RetrievalApiHandler(
         database_factory=DatabaseManager,
@@ -432,7 +432,7 @@ def commit_wiki_knowledge(
         raise InvalidArgumentException("지식 본문(content)은 필수 입력 항목입니다.")
 
     user_config = current_user_config.get() or {}
-    user_id = user_config.get("api_key", "SYSTEM")
+    user_id = user_config.get("user_id", "SYSTEM")
 
     return KnowledgeCommitApiHandler(
         runtime_factory=create_knowledge_commit_runtime,
@@ -451,7 +451,7 @@ def run_wiki_indexing(file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
     로컬 마크다운 파일들의 변경 사항을 감지하여 데이터베이스에 실시간으로 증분 인덱싱(임베딩)합니다.
     """
     user_config = current_user_config.get() or {}
-    user_id = user_config.get("api_key", "SYSTEM")
+    user_id = user_config.get("user_id", "SYSTEM")
 
     return IndexingRunApiHandler(
         database_factory=DatabaseManager,
