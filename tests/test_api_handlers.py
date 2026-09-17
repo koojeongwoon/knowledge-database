@@ -91,7 +91,7 @@ def test_retry_handler_isolates_owner_failure_and_restores_context() -> None:
         {"owner_id": "owner-2", "file_path": "qa/two.md"},
     ]
     settings = Mock()
-    settings.get_runtime_config.side_effect = [{"key": "one"}, {"key": "two"}]
+    settings.get_storage_runtime_config.side_effect = [{"key": "one"}, {"key": "two"}]
     context = ContextVar("test_retry_context", default={"original": True})
     observed = []
 

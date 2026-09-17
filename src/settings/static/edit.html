@@ -14,20 +14,15 @@
     <header>
       <p class="eyebrow">LLM-WIKI</p>
       <h1>등록·수정</h1>
-      <p class="intro">새 Secret을 입력한 항목만 교체합니다. 기존 Secret을 유지하려면 해당 입력란을 비워두세요.</p>
+      <p class="intro">AI 인증정보는 Credential Broker에서 관리합니다. Knowledge에는 저장소 연결과 모델 선택만 저장됩니다.</p>
     </header>
     <form id="settings-form" class="card">
       <div class="section-heading">
-        <div><span>01</span><h2>AI 엔진 및 임베딩 설정</h2></div>
+        <div><span>01</span><h2>AI 엔진 설정</h2></div>
         <span id="llm-state" class="badge neutral">미설정</span>
       </div>
 
-      <!-- 1. OpenAI API Key (필수) -->
-      <label for="openai-key">OpenAI API Key <span style="color:#d63384;font-size:0.85rem">(필수)</span></label>
-      <p class="hint" style="margin-top:-4px;margin-bottom:8px;font-size:0.85rem;color:#6c757d">
-        지식 검색 및 인덱싱(임베딩)에 필수적으로 사용되며, 아래 ChatGPT 구독을 연동하지 않을 경우 AI 추론에도 기본 사용됩니다.
-      </p>
-      <input id="openai-key" type="password" autocomplete="new-password" placeholder="기존 값을 유지하려면 비워두세요">
+      <p class="hint">임베딩과 LLM 호출은 Credential Broker가 인증한 결과만 사용합니다. Knowledge는 OpenAI 키나 OAuth 토큰을 받지 않습니다.</p>
 
       <!-- 2. LLM 추론 모델 선택 (현행화) -->
       <label for="llm-model" style="margin-top:14px">LLM 추론 모델</label>
@@ -54,11 +49,11 @@
           <span id="oauth-badge" class="badge neutral" style="font-size:0.75rem">미연동</span>
         </div>
         <p style="margin:0 0 10px 0;font-size:0.85rem;color:#495057">
-          추론(LLM) 비용을 절감하려면 ChatGPT Plus/Pro 계정을 연동하세요. (연동 시 AI 추론은 구독 쿼터를 사용하며, 지식 검색/임베딩은 위의 API Key를 계속 사용합니다.)
+          ChatGPT Plus/Pro 계정을 Credential Broker에 연동하면 구독 쿼터로 추론을 실행합니다. 임베딩도 Broker에 등록된 개인 연결을 사용합니다.
         </p>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button id="oauth-login-btn" type="button" class="primary compact">ChatGPT 계정 로그인</button>
-          <button id="oauth-unlink-btn" type="button" class="secondary compact" style="display:none">연동 해제 (API Key 사용)</button>
+          <button id="oauth-unlink-btn" type="button" class="secondary compact" style="display:none">ChatGPT 연동 해제</button>
           <span id="oauth-status-text" style="font-size:0.85rem;color:#6c757d"></span>
         </div>
         <div id="oauth-device-guide" style="display:none;margin-top:12px;padding:10px;background:#fff;border:1px solid #ced4da;border-radius:4px">

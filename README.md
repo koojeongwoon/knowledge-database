@@ -69,7 +69,7 @@ DB_USER=postgres
 DB_PASSWORD=postgres
 
 SETTINGS_ENCRYPTION_KEY=replace-with-a-long-random-secret
-EMBEDDING_PROVIDER=openai
+EMBEDDING_PROVIDER=broker
 EMBEDDING_DIM=1536
 
 SETTINGS_PUBLIC_HOST=knowledge.lynply.com
@@ -82,7 +82,7 @@ AUTH_SERVER_URL=https://auth.snappytory.com/t/ten_9664c024babc4110
 AUTH_TOKEN_ISSUER=https://auth.snappytory.com/t/ten_9664c024babc4110
 ```
 
-실제 사용자 OpenAI/S3 자격 증명은 서버 공용 환경변수나 Git에 넣지 않습니다. 로그인 후 설정 화면에서 사용자별로 저장합니다.
+사용자 OpenAI 자격 증명은 Credential Broker가 소유하며 Knowledge는 결과만 받습니다. S3/R2 자격 증명만 Knowledge 설정 화면에서 사용자별로 저장합니다. 어느 자격 증명도 서버 공용 환경변수나 Git에 넣지 않습니다.
 
 ### 3. 마이그레이션과 서버 실행
 
@@ -861,7 +861,7 @@ DOCUMENT_EXPANSION_ENABLED=false
 
 ## CLI 운영
 
-CLI는 DB에 저장된 해당 owner의 OpenAI/S3/R2 설정을 사용합니다.
+CLI의 AI 요청은 해당 owner의 Credential Broker 연결로 실행되며, S3/R2 설정만 Knowledge DB에서 읽습니다.
 
 ```bash
 # 전체 owner corpus 인덱싱

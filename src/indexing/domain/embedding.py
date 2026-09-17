@@ -1,7 +1,7 @@
 import hashlib
 import random
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List
 
 
 class BaseEmbeddingService(ABC):
@@ -49,66 +49,6 @@ class FakeEmbeddingService(BaseEmbeddingService):
             vector = [x / norm for x in vector]
             
         return vector
-
-    def get_dimension(self) -> int:
-        return self.dimension
-
-class OpenAIEmbeddingService(BaseEmbeddingService):
-    """
-    OpenAI Embedding API를 사용하는 임베딩 서비스
-    """
-    def __init__(self, model_name: str = "text-embedding-3-small", dimension: int = 1536, api_key: Optional[str] = None):
-        self.model_name = model_name
-        self.dimension = dimension
-        
-        # lazy import to avoid start-up overhead
-        from openai import OpenAI
-        
-        # 1. 인자로 넘어온 api_key가 없으면, 유저 컨텍스트를 활용해 로드 (DB 의존성 배제)
-        if not api_key:
-            try:
-                from src.core.config import current_user_config
-                config = current_user_config.get() or {}
-                api_key = config.get("embedding_api_key") or config.get("openai_api_key")
-            except Exception:
-                pass
-
-        # 2. 사용자 DB 설정에 키가 없다면 명확히 실패합니다.
-        if not api_key:
-            raise ValueError(
-                "OpenAI API Key가 설정되지 않았거나 유효하지 않습니다. "
-                "통합인증 및 에이전트 설정(mcp.json)에 OpenAI API Key를 주입해 주세요."
-            )
-            
-        self.client = OpenAI(api_key=api_key)
-
-
-    def embed_text(self, text: str) -> List[float]:
-        # text-embedding-3 모델들은 차원 지정을 지원합니다.
-        kwargs = {"input": [text], "model": self.model_name}
-        if "text-embedding-3" in self.model_name:
-            kwargs["dimensions"] = self.dimension
-            
-        response = self.client.embeddings.create(**kwargs)
-        return response.data[0].embedding
-
-    def embed_batch(self, texts: List[str], batch_size: int = 100) -> List[List[float]]:
-        """
-        OpenAI 배치 임베딩 API를 활용하여 한 번의 호출로 여러 텍스트를 임베딩합니다.
-        batch_size 단위로 청킹하여 과도한 페이로드를 방지합니다.
-        """
-        all_embeddings = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            kwargs = {"input": batch, "model": self.model_name}
-            if "text-embedding-3" in self.model_name:
-                kwargs["dimensions"] = self.dimension
-
-            response = self.client.embeddings.create(**kwargs)
-            # API 응답의 index 순서가 보장되지 않을 수 있으므로 정렬
-            batch_embeddings = [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
-            all_embeddings.extend(batch_embeddings)
-        return all_embeddings
 
     def get_dimension(self) -> int:
         return self.dimension

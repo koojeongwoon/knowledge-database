@@ -17,7 +17,7 @@ from src.core.config import current_user_config
 from src.core.database.factory import DatabaseManager
 from src.core.logging.audit import log_audit  # 감사 로거 유틸 임포트
 from src.indexing.composition import create_wiki_indexer
-from src.indexing.domain.embedding import FakeEmbeddingService, OpenAIEmbeddingService, BGEM3EmbeddingService
+from src.indexing.domain.embedding import FakeEmbeddingService, BGEM3EmbeddingService
 from src.retrieval.composition import create_wiki_searcher
 from src.retrieval.domain.formatter import format_retrieved_documents
 from src.retrieval.feedback import SearchFeedbackService
@@ -60,7 +60,7 @@ def _embedding_service():
         from src.indexing.infrastructure.broker_embedding import create_user_embedding_service
         return create_user_embedding_service(dimension=EMBEDDING_DIM)
     if EMBEDDING_PROVIDER == "openai":
-        return OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
+        raise RuntimeError("Direct OpenAI embedding credentials are retired; use EMBEDDING_PROVIDER=broker")
     if EMBEDDING_PROVIDER == "bge-m3":
         return BGEM3EmbeddingService()
     return FakeEmbeddingService(dimension=EMBEDDING_DIM)

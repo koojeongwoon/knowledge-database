@@ -152,7 +152,6 @@ def _create_user_settings(cur) -> None:
     cur.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_user_settings (
             owner_id VARCHAR(50) PRIMARY KEY,
-            openai_api_key_encrypted TEXT,
             storage_type VARCHAR(20) NOT NULL DEFAULT 's3',
             s3_endpoint_url TEXT,
             s3_bucket_name TEXT,
@@ -908,8 +907,7 @@ def _create_knowledge_baselines(cur) -> None:
 def _add_llm_auth_and_embedding_settings(cur) -> None:
     cur.execute("""
         ALTER TABLE knowledge_user_settings
-            ADD COLUMN IF NOT EXISTS llm_auth_type VARCHAR(32) NOT NULL DEFAULT 'api_key',
-            ADD COLUMN IF NOT EXISTS embedding_api_key_encrypted TEXT;
+            ADD COLUMN IF NOT EXISTS llm_auth_type VARCHAR(32) NOT NULL DEFAULT 'api_key';
     """)
     cur.execute("""
         ALTER TABLE knowledge_user_settings
@@ -978,6 +976,34 @@ def _clear_legacy_openai_oauth_token_columns(cur) -> None:
     """)
 
 
+def _clear_legacy_llm_api_key_columns(cur) -> None:
+    # AGE is preloaded by the shared PostgreSQL image without an ag_catalog
+    # schema in this database, which makes DROP COLUMN fail in its event hook.
+    # Remove all values now; runtime code no longer selects or writes these
+    # columns. Fresh databases never create them.
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'knowledge_user_settings'
+                  AND column_name = 'openai_api_key_encrypted'
+            ) THEN
+                UPDATE knowledge_user_settings
+                SET openai_api_key_encrypted = NULL;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'knowledge_user_settings'
+                  AND column_name = 'embedding_api_key_encrypted'
+            ) THEN
+                UPDATE knowledge_user_settings
+                SET embedding_api_key_encrypted = NULL;
+            END IF;
+        END $$;
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -1004,6 +1030,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(23, "create_embedding_bindings", _create_embedding_bindings),
     Migration(24, "remove_embedding_bindings", _remove_embedding_bindings),
     Migration(25, "clear_legacy_openai_oauth_token_columns", _clear_legacy_openai_oauth_token_columns),
+    Migration(26, "clear_legacy_llm_api_key_columns", _clear_legacy_llm_api_key_columns),
 )
 
 

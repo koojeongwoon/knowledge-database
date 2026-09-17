@@ -6,7 +6,7 @@ function message(text, error = false) { const el = byId("message"); el.textConte
 let currentAuthType = "api_key";
 let pollTimer = null;
 
-function updateAuthStateUI(authType, oauthConfigured, apiKeyConfigured) {
+function updateAuthStateUI(authType, oauthConfigured) {
   currentAuthType = authType;
   byId("llm-auth-type").value = authType;
 
@@ -22,9 +22,9 @@ function updateAuthStateUI(authType, oauthConfigured, apiKeyConfigured) {
     loginBtn.textContent = "다른 계정으로 재로그인";
     unlinkBtn.style.display = "inline-block";
   } else {
-    badge("llm-state", apiKeyConfigured ? "API Key 모드" : "미설정", apiKeyConfigured);
+    badge("llm-state", "Broker API Key 모드", true);
     badge("oauth-badge", "미연동", false);
-    oauthStatus.textContent = "API Key로 추론 실행";
+    oauthStatus.textContent = "Credential Broker의 API Key 연결로 추론 실행";
     loginBtn.textContent = "ChatGPT 계정 로그인";
     unlinkBtn.style.display = "none";
   }
@@ -74,8 +74,8 @@ async function startOAuthFlow() {
           clearInterval(pollTimer);
           guide.style.display = "none";
           btn.disabled = false;
-          updateAuthStateUI("openai_oauth", true, true);
-          message("✓ ChatGPT 계정 연동이 완료되었습니다! (임베딩은 상단 API Key를 사용합니다)");
+          updateAuthStateUI("openai_oauth", true);
+          message("✓ ChatGPT 계정 연동이 완료되었습니다.");
         } else if (pollData.status === "pending") {
           byId("oauth-poll-message").textContent = "브라우저 승인 대기 중… (" + new Date().toLocaleTimeString() + ")";
         }
@@ -102,8 +102,8 @@ async function unlinkOAuth() {
       throw new Error(`전환 실패 (HTTP ${res.status})`);
     }
     if (!res.ok) throw new Error(data.detail || "전환 실패");
-    updateAuthStateUI("api_key", false, true);
-    message("ChatGPT 계정 연동을 해제하고 API Key 추론 모드로 전환했습니다.");
+    updateAuthStateUI("api_key", false);
+    message("ChatGPT 계정 연동을 해제했습니다. Broker API Key 모드로 전환했습니다.");
   } catch (e) {
     message(e.message, true);
   }
@@ -123,8 +123,7 @@ async function loadSettings() {
 
     updateAuthStateUI(
       data.llm_auth_type || "api_key",
-      data.openai_oauth_configured || false,
-      data.openai_configured || false
+      data.openai_oauth_configured || false
     );
 
     if (data.llm_model_name && byId("llm-model")) {
@@ -151,12 +150,9 @@ byId("settings-form").addEventListener("submit", async event => {
   button.disabled = true;
   message("저장 중…");
 
-  const apiKeyVal = byId("openai-key").value || null;
   const payload = {
     llm_auth_type: currentAuthType,
     llm_model_name: byId("llm-model") ? byId("llm-model").value : "gpt-5.6-luna",
-    openai_api_key: apiKeyVal,
-    embedding_api_key: apiKeyVal,
     storage_type: byId("storage-type").value,
     s3_endpoint_url: byId("endpoint-url").value || null,
     s3_bucket_name: byId("bucket-name").value || null,

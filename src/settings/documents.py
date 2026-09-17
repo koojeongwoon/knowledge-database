@@ -30,7 +30,7 @@ class DocumentBrowserService:
     def _storage(self):
         service = UserSettingsService()
         try:
-            runtime_config = service.get_runtime_config(self.owner_id)
+            runtime_config = service.get_storage_runtime_config(self.owner_id)
         finally:
             service.db_manager.close()
         if not runtime_config.get("storage"):

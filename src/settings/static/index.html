@@ -14,7 +14,7 @@
     <header>
       <p class="eyebrow">LLM-WIKI</p>
       <h1>연결 정보</h1>
-      <p class="intro">현재 계정에 등록된 OpenAI와 S3/R2 연결 상태입니다. Secret 원문은 조회 화면에 표시하지 않습니다.</p>
+      <p class="intro">AI 인증은 Credential Broker에서 실행하고, Knowledge는 S3/R2 연결과 모델 설정만 관리합니다.</p>
     </header>
     <section class="card">
       <div class="section-heading"><div><span>01</span><h2>사용자 인증</h2></div><span id="auth-state" class="badge good">로그인됨</span></div>
@@ -25,7 +25,7 @@
       <div class="section-heading"><div><span>02</span><h2>연결 상태</h2></div><a class="button-link primary compact" href="/settings/edit">등록·수정</a></div>
       <div id="message" class="message" role="status" aria-live="polite"></div>
       <div class="details-list">
-        <div><span>OpenAI API Key (임베딩 필수)</span><strong id="openai-state">—</strong></div>
+        <div><span>AI 인증 경계</span><strong id="ai-credential-owner">Credential Broker</strong></div>
         <div><span>AI 추론 모드 (LLM)</span><strong id="llm-auth-type-state">—</strong></div>
         <div><span>LLM 추론 모델</span><strong id="llm-model-state">—</strong></div>
         <div><span>저장소 유형</span><strong id="storage-type-value">—</strong></div>

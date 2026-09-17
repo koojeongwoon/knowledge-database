@@ -56,13 +56,19 @@ def generate_blind_dataset(
     exclude_answer_files: List[str] | None = None,
     query_types: List[str] | None = None,
 ) -> Dict[str, Any]:
-    from openai import OpenAI
-
     config = current_user_config.get() or {}
     owner_id = config.get("user_id")
-    api_key = config.get("openai_api_key")
-    if not owner_id or not api_key:
-        raise RuntimeError("Owner context with OpenAI API key is required.")
+    if not owner_id:
+        raise RuntimeError("Verified owner context is required.")
+    from src.indexing.infrastructure.broker_chat import BrokerStructuredChat
+    from src.settings.service import UserSettingsService
+    settings = UserSettingsService()
+    try:
+        preferences = settings.get_llm_preferences(owner_id)
+    finally:
+        settings.db_manager.close()
+    client = BrokerStructuredChat(owner_id, auth_type=preferences["auth_type"])
+    model = preferences["model"]
 
     development = load_evaluation_cases(development_cases_path)
     excluded = {path for case in development for path in case.expected_paths}
@@ -77,7 +83,6 @@ def generate_blind_dataset(
     if len(documents) < answer_cases:
         raise RuntimeError(f"Only {len(documents)} eligible blind documents were found.")
 
-    client = OpenAI(api_key=api_key)
     query_types = query_types or ["exact", "semantic", "cross-language", "acronym", "mixed-language"]
     generated: Dict[str, GeneratedQuestion] = {}
     for start in range(0, len(documents), 5):
@@ -92,8 +97,8 @@ def generate_blind_dataset(
                 f"CASE_ID: {case_id}\nQUERY_TYPE: {query_type}\n"
                 f"TITLE: {doc['title']}\nDESCRIPTION: {doc.get('description') or ''}\nCONTENT:\n{content}"
             )
-        response = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+        parsed = client.parse(
+            model=model,
             messages=[
                 {"role": "system", "content": (
                     "You are an independent Korean search-quality evaluator. Create exactly one natural user query "
@@ -107,15 +112,12 @@ def generate_blind_dataset(
             response_format=GeneratedQuestionBatch,
             temperature=0.7,
         )
-        parsed = response.choices[0].message.parsed
-        if not parsed:
-            raise RuntimeError("Question generator returned no parsed output.")
         for question in parsed.questions:
             generated[question.case_id] = question
 
     no_answer_ids = [f"blind-no-answer-{index + 1:03d}" for index in range(no_answer_cases)]
-    response = client.beta.chat.completions.parse(
-        model="gpt-4o-mini",
+    parsed = client.parse(
+        model=model,
         messages=[
             {"role": "system", "content": (
                 "You are an independent search evaluator. For every supplied CASE_ID create one specific natural Korean question "
@@ -128,9 +130,6 @@ def generate_blind_dataset(
         response_format=GeneratedQuestionBatch,
         temperature=0.8,
     )
-    parsed = response.choices[0].message.parsed
-    if not parsed:
-        raise RuntimeError("No-answer generator returned no parsed output.")
     for question in parsed.questions:
         generated[question.case_id] = question
 

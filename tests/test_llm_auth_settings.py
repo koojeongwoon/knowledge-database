@@ -1,9 +1,7 @@
-import os
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from src.settings import service as settings_service_module
 from src.settings.service import UserSettingsService
 
 
@@ -17,23 +15,23 @@ class FakeCursor:
         if normalized.startswith("select"):
             row = self.storage.get(params[0] if params else "USER_1")
             if row and "select llm_model_name,llm_auth_type" in normalized:
-                row = (row[9], row[7])
+                row = (row[7], row[6])
             elif row and "select llm_model_name from" in normalized:
-                row = (row[9],)
+                row = (row[7],)
             self._last_result = row
             return
         if normalized.startswith("insert into knowledge_user_settings"):
             owner_id = params[0]
             self.storage[owner_id] = (
-                params[1], params[2], params[3], params[4], params[5], params[6],
-                None, params[7], params[8], params[9],
+                params[1], params[2], params[3], params[4], params[5],
+                None, params[6], params[7],
             )
 
     def fetchone(self):
         return self._last_result
 
     def fetchall(self):
-        return [(version,) for version in range(1, 26)]
+        return [(version,) for version in range(1, 27)]
 
 
 class FakeDbManager:
@@ -56,9 +54,10 @@ class LLMAuthSettingsTests(unittest.TestCase):
     def setUp(self):
         self.db = FakeDbManager()
         self.service = UserSettingsService(db_manager=self.db)
-        os.environ["SETTINGS_ENCRYPTION_KEY"] = "test-encryption-master-key-1234567890"
-        os.environ.pop("EMBEDDING_PROVIDER", None)
-        settings_service_module._runtime_config_cache.clear()
+        self.encryption_key = patch.dict(
+            "os.environ", {"SETTINGS_ENCRYPTION_KEY": "test-encryption-master-key-1234567890"}
+        )
+        self.encryption_key.start()
         self.linked = patch(
             "src.indexing.infrastructure.broker_chat.BrokerStructuredChat.linked",
             return_value=False,
@@ -67,8 +66,7 @@ class LLMAuthSettingsTests(unittest.TestCase):
 
     def tearDown(self):
         self.linked.stop()
-        os.environ.pop("EMBEDDING_PROVIDER", None)
-        settings_service_module._runtime_config_cache.clear()
+        self.encryption_key.stop()
 
     def test_saves_llm_preference_without_local_oauth_tokens(self):
         saved = self.service.save("USER_1", {
@@ -86,28 +84,16 @@ class LLMAuthSettingsTests(unittest.TestCase):
             "model": "gpt-5.6-luna",
             "auth_type": "openai_oauth",
         })
-        runtime = self.service.get_runtime_config("USER_1")
-        self.assertNotIn("openai_oauth_access_token", runtime)
-        self.assertNotIn("openai_oauth_refresh_token", runtime)
-        self.assertNotIn("llm_bearer_token", runtime)
+        runtime = self.service.get_storage_runtime_config("USER_1")
+        self.assertEqual(runtime["storage"]["s3_bucket_name"], "my-bucket")
+        self.assertFalse(any("openai" in key or "embedding" in key for key in runtime))
 
-    def test_broker_embedding_mode_does_not_decrypt_provider_keys(self):
-        self.service.save("USER_1", {
-            "openai_api_key": "general-api-key",
-            "embedding_api_key": "dedicated-embedding-key",
-            "storage_type": "s3",
-            "s3_endpoint_url": "https://s3.example.com",
-            "s3_bucket_name": "my-bucket",
-            "s3_access_key_id": "access-key",
-            "s3_secret_access_key": "secret-key",
-        })
-        os.environ["EMBEDDING_PROVIDER"] = "broker"
-        settings_service_module._runtime_config_cache.clear()
-
-        runtime = self.service.get_runtime_config("USER_1")
-
-        self.assertIsNone(runtime["openai_api_key"])
-        self.assertIsNone(runtime["embedding_api_key"])
+    def test_provider_keys_are_never_stored_or_returned(self):
+        with self.assertRaisesRegex(ValueError, "Credential Broker"):
+            self.service.save("USER_1", {
+                "openai_api_key": "general-api-key",
+                "embedding_api_key": "dedicated-embedding-key",
+            })
 
 
 if __name__ == "__main__":

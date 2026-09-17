@@ -15,7 +15,6 @@ class UserContext(BaseModel):
     s3_bucket: Optional[str] = None
     s3_region: Optional[str] = None
     s3_prefix: Optional[str] = None
-    openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None

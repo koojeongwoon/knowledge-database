@@ -14,8 +14,7 @@ def get_embedding_service():
         from src.indexing.infrastructure.broker_embedding import create_user_embedding_service
         return create_user_embedding_service(dimension=EMBEDDING_DIM)
     if EMBEDDING_PROVIDER == "openai":
-        from src.indexing.domain.embedding import OpenAIEmbeddingService
-        return OpenAIEmbeddingService(dimension=EMBEDDING_DIM)
+        raise RuntimeError("Direct OpenAI embedding credentials are retired; use EMBEDDING_PROVIDER=broker")
     elif EMBEDDING_PROVIDER == "bge-m3":
         from src.indexing.domain.embedding import BGEM3EmbeddingService
         return BGEM3EmbeddingService()

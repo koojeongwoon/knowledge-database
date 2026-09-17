@@ -14,8 +14,7 @@ async function loadSettings() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "설정을 불러오지 못했습니다.");
     
-    byId("openai-state").textContent = data.openai_configured ? "등록됨" : "미등록";
-    byId("llm-auth-type-state").textContent = data.llm_auth_type === "openai_oauth" && data.openai_oauth_configured ? "ChatGPT Plus/Pro 구독 (OAuth)" : (data.openai_configured ? "OpenAI API Key (기본)" : "미설정");
+    byId("llm-auth-type-state").textContent = data.llm_auth_type === "openai_oauth" && data.openai_oauth_configured ? "ChatGPT Plus/Pro 구독 (Broker OAuth)" : "Broker API Key 모드";
     if (byId("llm-model-state")) {
       byId("llm-model-state").textContent = data.llm_model_name || "gpt-5.6-luna";
     }

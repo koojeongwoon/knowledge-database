@@ -43,7 +43,7 @@ def test_broker_mode_never_loads_llm_credentials(monkeypatch):
     from src.settings.service import UserSettingsService
     from src.indexing.infrastructure.expansion import create_document_expander
     monkeypatch.setattr(config,'DOCUMENT_EXPANSION_ENABLED',True)
-    monkeypatch.setattr(UserSettingsService,'get_runtime_config',lambda *a:pytest.fail('raw credentials loaded'))
+    monkeypatch.setattr(UserSettingsService,'get_runtime_config',lambda *a:pytest.fail('raw credentials loaded'),raising=False)
     monkeypatch.setattr(UserSettingsService,'get_llm_preferences',lambda *_:{'model':'gpt-5.6-luna','auth_type':'openai_oauth'})
     monkeypatch.setattr('src.indexing.infrastructure.broker_chat.BrokerIdentityRepository',lambda:SimpleNamespace(subject_for_owner=lambda _:'sub'))
     token=current_user_config.set({'user_id':'owner'})

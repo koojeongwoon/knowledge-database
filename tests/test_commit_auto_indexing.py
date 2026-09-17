@@ -86,8 +86,7 @@ class CommitAutoIndexingTests(unittest.TestCase):
             {"owner_id": "USER_1", "file_path": path}
             for path in paths
         ]
-        settings_service_class.return_value.get_runtime_config.return_value = {
-            "openai_api_key": "stored-key",
+        settings_service_class.return_value.get_storage_runtime_config.return_value = {
             "storage": {"storage_type": "s3"},
         }
         run_indexing.return_value = json.dumps({
@@ -119,9 +118,9 @@ class CommitAutoIndexingTests(unittest.TestCase):
             {"owner_id": "USER_1", "file_path": "qa/one.md"},
             {"owner_id": "USER_2", "file_path": "qa/two.md"},
         ]
-        settings_service_class.return_value.get_runtime_config.side_effect = [
-            {"openai_api_key": "user-1-key", "storage": {"storage_type": "s3"}},
-            {"openai_api_key": "user-2-key", "storage": {"storage_type": "s3"}},
+        settings_service_class.return_value.get_storage_runtime_config.side_effect = [
+            {"storage": {"storage_type": "s3", "s3_bucket_name": "user-1"}},
+            {"storage": {"storage_type": "s3", "s3_bucket_name": "user-2"}},
         ]
 
         observed_configs = []
@@ -136,7 +135,7 @@ class CommitAutoIndexingTests(unittest.TestCase):
         self.assertTrue(response["success"])
         self.assertEqual(response["data"]["processed"], 2)
         self.assertEqual([config["user_id"] for _, config in observed_configs], ["USER_1", "USER_2"])
-        self.assertEqual([config["openai_api_key"] for _, config in observed_configs], ["user-1-key", "user-2-key"])
+        self.assertEqual([config["storage"]["s3_bucket_name"] for _, config in observed_configs], ["user-1", "user-2"])
         repository.complete.assert_any_call(["qa/one.md"], owner_id="USER_1")
         repository.complete.assert_any_call(["qa/two.md"], owner_id="USER_2")
 

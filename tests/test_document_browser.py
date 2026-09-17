@@ -16,7 +16,7 @@ class DocumentBrowserTests(unittest.TestCase):
     @patch("src.settings.documents.UserSettingsService")
     def test_storage_is_built_from_the_requested_owners_settings(self, settings_class, storage_manager):
         settings = settings_class.return_value
-        settings.get_runtime_config.return_value = {
+        settings.get_storage_runtime_config.return_value = {
             "storage": {"storage_type": "s3", "s3_endpoint_url": "https://owner-1.example"},
         }
         storage = Mock()
@@ -28,7 +28,7 @@ class DocumentBrowserTests(unittest.TestCase):
 
         result = DocumentBrowserService("USER_1").list_documents()
 
-        settings.get_runtime_config.assert_called_once_with("USER_1")
+        settings.get_storage_runtime_config.assert_called_once_with("USER_1")
         storage_manager.assert_called_once_with(user_id="USER_1")
         self.assertEqual({item["path"] for item in result}, {"qa/one.md", "topics/Development/two.md"})
 

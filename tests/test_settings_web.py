@@ -94,7 +94,8 @@ class SettingsWebTests(unittest.TestCase):
         self.authenticate()
         response = self.client.get("/settings/edit")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("OpenAI API Key", response.text)
+        self.assertIn("Credential Broker", response.text)
+        self.assertNotIn('id="openai-key"', response.text)
         self.assertIn("settings-form", response.text)
 
     def test_dashboard_is_the_authenticated_landing_page(self):
@@ -301,6 +302,17 @@ class SettingsWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         service.save.assert_not_called()
         service.db_manager.close.assert_called_once()
+
+    @patch("src.settings.web._authenticated_user", return_value="USER_4")
+    def test_settings_rejects_local_provider_credentials(self, _authenticated_user):
+        response = self.client.put("/api/settings", json={
+            "storage_type": "s3",
+            "s3_endpoint_url": "https://storage.example",
+            "s3_bucket_name": "owner-bucket",
+            "openai_api_key": "must-go-to-broker",
+        })
+
+        self.assertEqual(response.status_code, 422)
 
     @patch("src.settings.web.SearchFeedbackService")
     @patch("src.settings.web._authenticated_user")

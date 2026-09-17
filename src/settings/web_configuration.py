@@ -1,13 +1,12 @@
 from typing import Awaitable, Callable, Optional, Type
 
 from fastapi import APIRouter, Cookie, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class SettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     llm_auth_type: Optional[str] = Field(default=None, pattern="^(api_key|openai_oauth)$")
     llm_model_name: Optional[str] = Field(default=None, max_length=100)
-    openai_api_key: Optional[str] = Field(default=None, max_length=512)
-    embedding_api_key: Optional[str] = Field(default=None, max_length=512)
     storage_type: str = Field(default="s3", pattern="^(s3|r2)$")
     s3_endpoint_url: Optional[str] = Field(default=None, max_length=2048)
     s3_bucket_name: Optional[str] = Field(default=None, max_length=255)
