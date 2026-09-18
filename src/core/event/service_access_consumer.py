@@ -143,3 +143,6 @@ class IamServiceAccessConsumer(threading.Thread):
 
     def stop(self):
         self.running = False
+
+
+IamUserServiceAccessConsumer = IamServiceAccessConsumer

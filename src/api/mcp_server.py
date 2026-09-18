@@ -419,8 +419,8 @@ from src.core.event.lifecycle_consumer import IamUserLifecycleConsumer
 lifecycle_consumer = IamUserLifecycleConsumer()
 lifecycle_consumer.start()
 
-from src.core.event.service_access_consumer import IamUserServiceAccessConsumer
-service_access_consumer = IamUserServiceAccessConsumer()
+from src.core.event.service_access_consumer import IamServiceAccessConsumer
+service_access_consumer = IamServiceAccessConsumer()
 service_access_consumer.start()
 
 # 전환 기간에만 legacy 가입 선등록을 명시적으로 활성화한다.
