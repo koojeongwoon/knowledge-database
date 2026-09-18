@@ -51,6 +51,7 @@ def apply_service_access_event(event, db_manager=None) -> tuple[bool, str | None
                 last_event_id = EXCLUDED.last_event_id,
                 updated_at = CURRENT_TIMESTAMP
             WHERE iam_user_service_access_states.access_version < EXCLUDED.access_version
+              AND iam_user_service_access_states.service_access_status <> 'WITHDRAWN'
             RETURNING subject_id
             """,
             (event.tenant_id, event.subject_id, event.client_id, event.status, event.access_version, event.event_id),
