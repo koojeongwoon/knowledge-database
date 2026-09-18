@@ -20,7 +20,8 @@ MAX_ATTEMPTS = 5
 
 def apply_user_lifecycle_event(event, db_manager=None) -> tuple[bool, str | None, list[str]]:
     if event.issuer != AUTH_TOKEN_ISSUER or event.tenant_id != KNOWLEDGE_TENANT_ID:
-        raise ValueError("IAM lifecycle event is outside the Knowledge tenant boundary")
+        # Ignore events for other tenants without error (ACKed with no effect)
+        return False, None, []
     manager = db_manager or DatabaseManager()
     user_id = None
     key_hashes = []
