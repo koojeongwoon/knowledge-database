@@ -96,7 +96,7 @@ class IamServiceAccessConsumer(threading.Thread):
                     self._process_streams([(SERVICE_ACCESS_STREAM, claimed[1])])
                 streams = self.redis_client.xreadgroup(
                     groupname=SERVICE_ACCESS_GROUP, consumername=self.consumer_name,
-                    streams={SERVICE_ACCESS_STREAM: ">"}, count=10, block=5000,
+                    streams={SERVICE_ACCESS_STREAM: ">"}, count=10, block=2000,
                 )
                 with self.db_manager_factory().transaction() as cur:
                     cur.execute(

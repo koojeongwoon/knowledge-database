@@ -72,7 +72,7 @@ def StreamRedisClient() -> redis.Redis:
         password=REDIS_STREAM_PASSWORD or None,
         db=0,
         decode_responses=True,
-        socket_timeout=5.0,           # Streams block 폴링 지연을 고려한 여유 타임아웃
+        socket_timeout=10.0,          # Streams block 폴링 지연을 고려한 여유 타임아웃
         socket_connect_timeout=2.0,
         socket_keepalive=True,
     )

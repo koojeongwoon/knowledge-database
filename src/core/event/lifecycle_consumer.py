@@ -110,7 +110,7 @@ class IamUserLifecycleConsumer(threading.Thread):
                     self._process_streams([(STREAM, claimed[1])])
                 streams = self.redis_client.xreadgroup(
                     groupname=GROUP, consumername=self.consumer_name,
-                    streams={STREAM: ">"}, count=10, block=5000,
+                    streams={STREAM: ">"}, count=10, block=2000,
                 )
                 with self.db_manager_factory().transaction() as cur:
                     cur.execute(
