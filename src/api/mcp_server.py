@@ -415,14 +415,19 @@ mcp_http_app = mcp.streamable_http_app()
 mcp_app = MCPAuthMiddleware(mcp_http_app)
 app = SettingsPathDispatcher(settings_app, mcp_app)
 
-# Redis Stream 기반의 회원가입 비동기 이벤트 컨슈머 데몬 시작
-try:
-    from src.core.event.consumer import UserSignupEventConsumer
-    event_consumer = UserSignupEventConsumer()
-    event_consumer.start()
-except Exception as e:
-    import logging
-    logging.getLogger("mcp_server").error(f"Failed to start UserSignupEventConsumer: {e}")
+from src.core.event.lifecycle_consumer import IamUserLifecycleConsumer
+lifecycle_consumer = IamUserLifecycleConsumer()
+lifecycle_consumer.start()
+
+# 전환 기간에만 legacy 가입 선등록을 명시적으로 활성화한다.
+if os.getenv("IAM_LEGACY_SIGNUP_PREREGISTRATION_ENABLED", "false").lower() == "true":
+    try:
+        from src.core.event.consumer import UserSignupEventConsumer
+        event_consumer = UserSignupEventConsumer()
+        event_consumer.start()
+    except Exception as e:
+        import logging
+        logging.getLogger("mcp_server").error(f"Failed to start UserSignupEventConsumer: {e}")
 
 if __name__ == "__main__":
     import uvicorn

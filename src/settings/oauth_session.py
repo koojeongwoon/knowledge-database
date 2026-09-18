@@ -36,6 +36,11 @@ class TokenSet:
     access_token_expires_at: int
     absolute_expires_at: int
     auth_id: str
+    issuer: str
+    tenant_id: str
+    email: str
+    name: str = ""
+    user_version: int = 1
     id_token: str = ""
 
 
@@ -172,12 +177,17 @@ class ServerSessionStore:
         token_set = self._validated_token_set(token_payload)
         session_id = secrets.token_urlsafe(32)
         ttl = max(1, token_set.absolute_expires_at - int(time.time()))
+        session_key = self.SESSION_PREFIX + self._hash(session_id)
         if not self.cache.set(
-            self.SESSION_PREFIX + self._hash(session_id),
+            session_key,
             self._encrypt(json.dumps(asdict(token_set), separators=(",", ":"))),
             ttl,
         ):
             raise OAuthSessionUnavailable("로그인 세션 저장소를 사용할 수 없습니다.")
+        client = getattr(self.cache, "client", None)
+        if client is not None:
+            client.sadd(f"knowledge:web-user:{token_set.auth_id}", session_key)
+            client.expire(f"knowledge:web-user:{token_set.auth_id}", ttl + 60)
         return session_id
 
     async def resolve(self, session_id: str) -> TokenSet:
@@ -249,7 +259,15 @@ class ServerSessionStore:
                     pass
 
     def revoke(self, session_id: str) -> None:
-        self.cache.delete(self.SESSION_PREFIX + self._hash(session_id))
+        session_key = self.SESSION_PREFIX + self._hash(session_id)
+        try:
+            token_set = self._load(session_id)
+        except OAuthSessionError:
+            token_set = None
+        self.cache.delete(session_key)
+        client = getattr(self.cache, "client", None)
+        if client is not None and token_set is not None:
+            client.srem(f"knowledge:web-user:{token_set.auth_id}", session_key)
 
     async def logout(self, session_id: str) -> tuple[str, bool]:
         token_set = self._load(session_id)
@@ -297,6 +315,11 @@ class ServerSessionStore:
             access_token_expires_at=expires_at,
             absolute_expires_at=absolute_expires_at or now + self.session_ttl,
             auth_id=claims["sub"],
+            issuer=claims["iss"],
+            tenant_id=claims["tenant_id"],
+            email=claims["email"],
+            name=claims.get("name", ""),
+            user_version=int(claims.get("user_version", 1)),
             id_token=payload.get("id_token") or id_token,
         )
 

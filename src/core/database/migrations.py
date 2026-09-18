@@ -1004,6 +1004,69 @@ def _clear_legacy_llm_api_key_columns(cur) -> None:
     """)
 
 
+def _add_user_lifecycle_identity(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_users
+        ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS email VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS name VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        ADD COLUMN IF NOT EXISTS user_version BIGINT NOT NULL DEFAULT 1;
+    """)
+
+
+def _add_iam_user_lifecycle_inbox(cur) -> None:
+    cur.execute("""
+        ALTER TABLE knowledge_api_keys
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+    """)
+    cur.execute("""
+        CREATE TABLE iam_user_lifecycle_states (
+            tenant_id VARCHAR(100) NOT NULL,
+            subject_id VARCHAR(255) NOT NULL,
+            lifecycle_status VARCHAR(20) NOT NULL
+                CHECK (lifecycle_status IN ('ACTIVE', 'BLOCKED', 'WITHDRAWN')),
+            user_version BIGINT NOT NULL,
+            last_event_id VARCHAR(100) NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, subject_id)
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE iam_user_lifecycle_events (
+            event_id VARCHAR(100) PRIMARY KEY,
+            tenant_id VARCHAR(100) NOT NULL,
+            subject_id VARCHAR(255) NOT NULL,
+            user_version BIGINT NOT NULL,
+            processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE iam_user_lifecycle_health (
+            singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+            last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL
+        );
+    """)
+    cur.execute("""
+        INSERT INTO iam_user_lifecycle_health(singleton, last_seen_at)
+        VALUES (TRUE, CURRENT_TIMESTAMP) ON CONFLICT (singleton) DO NOTHING;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_users
+        DROP CONSTRAINT IF EXISTS knowledge_users_lifecycle_status_check;
+    """)
+    cur.execute("""
+        ALTER TABLE knowledge_users
+        ADD CONSTRAINT knowledge_users_lifecycle_status_check
+        CHECK (lifecycle_status IN ('ACTIVE', 'BLOCKED', 'WITHDRAWN'));
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_users_tenant_subject
+        ON knowledge_users (tenant_id, sub_val)
+        WHERE tenant_id IS NOT NULL;
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -1031,6 +1094,8 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(24, "remove_embedding_bindings", _remove_embedding_bindings),
     Migration(25, "clear_legacy_openai_oauth_token_columns", _clear_legacy_openai_oauth_token_columns),
     Migration(26, "clear_legacy_llm_api_key_columns", _clear_legacy_llm_api_key_columns),
+    Migration(27, "add_user_lifecycle_identity", _add_user_lifecycle_identity),
+    Migration(28, "add_iam_user_lifecycle_inbox", _add_iam_user_lifecycle_inbox),
 )
 
 

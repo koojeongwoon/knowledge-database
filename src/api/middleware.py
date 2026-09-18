@@ -13,6 +13,7 @@ from src.core.config import current_user_config
 from src.core.logging.audit import log_audit
 from src.api_keys.auth import verify_gateway_delegation_token
 from src.api_keys.service import ApiKeyService
+from src.users.service import VerifiedUserIdentity
 
 # 추상화된 공용 캐시 매니저 획득 (Wiki Cache 인스턴스 연동)
 cache_manager = WikiCacheManager()
@@ -49,9 +50,17 @@ def _validate_api_key_from_db(plain_key: str) -> dict:
         from src.core.database.factory import DatabaseManager
         with DatabaseManager().cursor() as cur:
             cur.execute("""
-                SELECT user_id, expires_at 
-                FROM knowledge_api_keys 
-                WHERE api_key_hash = %s;
+                SELECT api_key.user_id, api_key.expires_at
+                FROM knowledge_api_keys api_key
+                JOIN knowledge_users knowledge_user ON knowledge_user.user_id = api_key.user_id
+                WHERE api_key.api_key_hash = %s
+                  AND api_key.is_active
+                  AND knowledge_user.lifecycle_status = 'ACTIVE'
+                  AND EXISTS (
+                      SELECT 1 FROM iam_user_lifecycle_health
+                      WHERE singleton
+                        AND last_seen_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+                  );
             """, (key_hash,))
             row = cur.fetchone()
             
@@ -167,7 +176,9 @@ class MCPAuthMiddleware:
             token = auth_header.split(" ", 1)[1]
             try:
                 claims = verify_gateway_delegation_token(token)
-                validated_user_id = ApiKeyService().get_or_create_user(claims["sub"])
+                validated_user_id = ApiKeyService().get_or_create_user(
+                    VerifiedUserIdentity.from_claims(claims)
+                )
             except (jwt.PyJWTError, KeyError, ValueError):
                 await _send_json_error(send, 401, "Unauthorized delegation token")
                 return

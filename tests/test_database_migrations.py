@@ -81,6 +81,8 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertNotIn("DROP COLUMN IF EXISTS openai_oauth_access_token_encrypted", sql)
         self.assertIn("SET openai_api_key_encrypted = NULL", sql)
         self.assertIn("SET embedding_api_key_encrypted = NULL", sql)
+        self.assertIn("ADD COLUMN IF NOT EXISTS tenant_id", sql)
+        self.assertIn("uq_knowledge_users_tenant_subject", sql)
         self.assertNotIn("ADD COLUMN IF NOT EXISTS embedding_api_key_encrypted", sql)
         self.assertIn("ADD COLUMN IF NOT EXISTS llm_model_name", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_schema_migrations", sql)

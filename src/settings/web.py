@@ -31,6 +31,7 @@ from src.settings.web_learning import create_learning_router
 from src.settings.web_pages import create_page_router
 from src.settings.web_dispatcher import SettingsPathDispatcher
 from src.core.storage.factory import invalidate_storage_cache
+from src.users.service import VerifiedUserIdentity
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 settings_app = FastAPI(title="LLM-Wiki Settings", docs_url=None, redoc_url=None)
@@ -51,7 +52,7 @@ async def _authenticated_user(authorization: Optional[str], session_token: Optio
     if session_token:
         try:
             token_set = await session_store().resolve(session_token)
-            return ApiKeyService().get_or_create_user(token_set.auth_id)
+            return ApiKeyService().get_or_create_user(_session_identity(token_set))
         except OAuthSessionError as exc:
             raise HTTPException(status_code=401, detail="로그인 세션이 만료되었습니다.") from exc
     if not authorization or not authorization.startswith("Bearer "):
@@ -62,17 +63,28 @@ async def _authenticated_user(authorization: Optional[str], session_token: Optio
     return result.get("user_id", "SYSTEM")
 
 
-async def _authenticated_auth_id(authorization: Optional[str], session_token: Optional[str] = None) -> str:
+def _session_identity(token_set) -> VerifiedUserIdentity:
+    return VerifiedUserIdentity(
+        issuer=token_set.issuer,
+        tenant_id=token_set.tenant_id,
+        subject_id=token_set.auth_id,
+        email=token_set.email,
+        name=token_set.name or None,
+        user_version=token_set.user_version,
+    )
+
+
+async def _authenticated_auth_id(authorization: Optional[str], session_token: Optional[str] = None) -> VerifiedUserIdentity:
     if session_token:
         try:
-            return (await session_store().resolve(session_token)).auth_id
+            return _session_identity(await session_store().resolve(session_token))
         except OAuthSessionError as exc:
             raise HTTPException(status_code=401, detail="로그인 세션이 만료되었습니다.") from exc
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="인증서버 로그인 토큰이 필요합니다.")
     try:
         claims = verify_auth_token(authorization.split(" ", 1)[1].strip())
-        return claims["sub"]
+        return VerifiedUserIdentity.from_claims(claims)
     except (jwt.PyJWTError, KeyError) as exc:
         raise HTTPException(status_code=401, detail="유효하지 않은 인증서버 로그인 토큰입니다.") from exc
 

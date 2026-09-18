@@ -1,11 +1,11 @@
 import base64
 import hashlib
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from src.core.cache.factory import WikiCacheManager
 from src.core.database.factory import DatabaseManager
+from src.users.service import LocalUserService, VerifiedUserIdentity
 
 
 def hash_api_key(plain_key: str) -> str:
@@ -17,8 +17,8 @@ class ApiKeyService:
         self.db_manager = db_manager or DatabaseManager()
         self.cache_manager = cache_manager or WikiCacheManager()
 
-    def create(self, auth_id: str, key_name: str, validity_days: int = 365) -> dict:
-        user_id = self._ensure_user(auth_id)
+    def create(self, identity: VerifiedUserIdentity, key_name: str, validity_days: int = 365) -> dict:
+        user_id = self.get_or_create_user(identity)
         key_id = str(uuid.uuid4())
         plain_key = f"kb_live_{secrets.token_urlsafe(32)}"
         key_hash = hash_api_key(plain_key)
@@ -45,11 +45,11 @@ class ApiKeyService:
             },
         }
 
-    def get_or_create_user(self, auth_id: str) -> str:
-        return self._ensure_user(auth_id)
+    def get_or_create_user(self, identity: VerifiedUserIdentity) -> str:
+        return LocalUserService(self.db_manager).ensure_local_user(identity)
 
-    def list_for_user(self, auth_id: str) -> list[dict]:
-        user_id = self._ensure_user(auth_id)
+    def list_for_user(self, identity: VerifiedUserIdentity) -> list[dict]:
+        user_id = self.get_or_create_user(identity)
         with self.db_manager.cursor() as cur:
             cur.execute(
                 """
@@ -72,8 +72,8 @@ class ApiKeyService:
             for row in rows
         ]
 
-    def revoke(self, auth_id: str, key_id: str) -> bool:
-        user_id = self._ensure_user(auth_id)
+    def revoke(self, identity: VerifiedUserIdentity, key_id: str) -> bool:
+        user_id = self.get_or_create_user(identity)
         with self.db_manager.transaction() as cur:
             cur.execute(
                 "SELECT api_key_hash FROM knowledge_api_keys WHERE key_id = %s AND user_id = %s",
@@ -88,16 +88,3 @@ class ApiKeyService:
             )
         self.cache_manager.delete(f"auth:token:hash:{row[0]}")
         return True
-
-    def _ensure_user(self, auth_id: str) -> str:
-        with self.db_manager.transaction() as cur:
-            cur.execute("SELECT user_id FROM knowledge_users WHERE sub_val = %s", (auth_id,))
-            row = cur.fetchone()
-            if row:
-                return row[0]
-            user_id = str(uuid.uuid4())
-            cur.execute(
-                "INSERT INTO knowledge_users (user_id, sub_val) VALUES (%s, %s)",
-                (user_id, auth_id),
-            )
-            return user_id

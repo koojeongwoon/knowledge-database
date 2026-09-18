@@ -12,6 +12,18 @@ from src.settings.oauth_session import (
 )
 
 
+def verified_claims(expires_at):
+    return {
+        "iss": "https://auth.snappytory.com/t/ten_9664c024babc4110",
+        "tenant_id": "ten_9664c024babc4110",
+        "sub": "auth-user",
+        "email": "user@example.com",
+        "name": "User",
+        "user_version": "1",
+        "exp": expires_at,
+    }
+
+
 class FakeCache:
     def __init__(self):
         self.values = {}
@@ -55,8 +67,8 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_expiring_access_token_is_refreshed_and_rotated(self, verify_token):
         now = int(time.time())
         verify_token.side_effect = [
-            {"sub": "auth-user", "exp": now + 1},
-            {"sub": "auth-user", "exp": now + 3600},
+            verified_claims(now + 1),
+            verified_claims(now + 3600),
         ]
         session_id = self.store.create({"access_token": "old-access", "refresh_token": "old-refresh"})
         self.oauth.refresh.return_value = {"access_token": "new-access", "refresh_token": "new-refresh"}
@@ -71,8 +83,8 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_requests_only_refresh_once(self, verify_token):
         now = int(time.time())
         verify_token.side_effect = [
-            {"sub": "auth-user", "exp": now + 1},
-            {"sub": "auth-user", "exp": now + 3600},
+            verified_claims(now + 1),
+            verified_claims(now + 3600),
         ]
         session_id = self.store.create({"access_token": "old-access", "refresh_token": "old-refresh"})
 
@@ -89,7 +101,7 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.settings.oauth_session.verify_auth_token")
     async def test_temporary_auth_outage_keeps_still_valid_access_token(self, verify_token):
         now = int(time.time())
-        verify_token.return_value = {"sub": "auth-user", "exp": now + 60}
+        verify_token.return_value = verified_claims(now + 60)
         session_id = self.store.create({"access_token": "old-access", "refresh_token": "old-refresh"})
         self.oauth.refresh.side_effect = OAuthSessionUnavailable("temporary outage")
 
@@ -100,7 +112,7 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.settings.oauth_session.verify_auth_token")
     async def test_rejected_refresh_revokes_local_session(self, verify_token):
         now = int(time.time())
-        verify_token.return_value = {"sub": "auth-user", "exp": now + 1}
+        verify_token.return_value = verified_claims(now + 1)
         session_id = self.store.create({"access_token": "old-access", "refresh_token": "old-refresh"})
         self.oauth.refresh.side_effect = OAuthSessionExpired("revoked")
 
@@ -112,7 +124,7 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.settings.oauth_session.verify_auth_token")
     async def test_logout_revokes_refresh_token_before_local_session(self, verify_token):
         now = int(time.time())
-        verify_token.return_value = {"sub": "auth-user", "exp": now + 3600}
+        verify_token.return_value = verified_claims(now + 3600)
         self.oauth.logout_url.return_value = "https://auth.example/connect/logout"
         session_id = self.store.create({
             "access_token": "access",
@@ -132,7 +144,7 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.settings.oauth_session.verify_auth_token")
     async def test_logout_deletes_local_session_when_remote_revocation_fails(self, verify_token):
         now = int(time.time())
-        verify_token.return_value = {"sub": "auth-user", "exp": now + 3600}
+        verify_token.return_value = verified_claims(now + 3600)
         self.oauth.revoke.side_effect = OAuthSessionUnavailable("temporary outage")
         self.oauth.logout_url.return_value = "https://auth.example/connect/logout"
         session_id = self.store.create({
@@ -151,8 +163,8 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_logout_refreshes_legacy_session_to_obtain_id_token(self, verify_token):
         now = int(time.time())
         verify_token.side_effect = [
-            {"sub": "auth-user", "exp": now + 3600},
-            {"sub": "auth-user", "exp": now + 3600},
+            verified_claims(now + 3600),
+            verified_claims(now + 3600),
         ]
         self.oauth.refresh.return_value = {
             "access_token": "new-access",
