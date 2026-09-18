@@ -11,7 +11,11 @@ import jwt
 from src.core.cache.factory import WikiCacheManager
 from src.core.config import current_user_config
 from src.core.logging.audit import log_audit
-from src.api_keys.auth import verify_gateway_delegation_token
+from src.api_keys.auth import (
+    KNOWLEDGE_CLIENT_ID,
+    is_service_access_enforcement_enabled,
+    verify_gateway_delegation_token,
+)
 from src.api_keys.service import ApiKeyService
 from src.users.service import VerifiedUserIdentity
 
@@ -48,20 +52,46 @@ def _validate_api_key_from_db(plain_key: str) -> dict:
     key_hash = _hash_api_key(plain_key)
     try:
         from src.core.database.factory import DatabaseManager
+        enforce_service_access = is_service_access_enforcement_enabled()
         with DatabaseManager().cursor() as cur:
-            cur.execute("""
-                SELECT api_key.user_id, api_key.expires_at
-                FROM knowledge_api_keys api_key
-                JOIN knowledge_users knowledge_user ON knowledge_user.user_id = api_key.user_id
-                WHERE api_key.api_key_hash = %s
-                  AND api_key.is_active
-                  AND knowledge_user.lifecycle_status = 'ACTIVE'
-                  AND EXISTS (
-                      SELECT 1 FROM iam_user_lifecycle_health
-                      WHERE singleton
-                        AND last_seen_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'
-                  );
-            """, (key_hash,))
+            if enforce_service_access:
+                cur.execute("""
+                    SELECT api_key.user_id, api_key.expires_at
+                    FROM knowledge_api_keys api_key
+                    JOIN knowledge_users knowledge_user ON knowledge_user.user_id = api_key.user_id
+                    LEFT JOIN iam_user_service_access_states access_state
+                           ON access_state.tenant_id = knowledge_user.tenant_id
+                          AND access_state.subject_id = knowledge_user.sub_val
+                          AND access_state.client_id = %s
+                    WHERE api_key.api_key_hash = %s
+                      AND api_key.is_active
+                      AND knowledge_user.lifecycle_status = 'ACTIVE'
+                      AND (access_state.service_access_status IS NULL OR access_state.service_access_status = 'ACTIVE')
+                      AND EXISTS (
+                          SELECT 1 FROM iam_user_lifecycle_health
+                          WHERE singleton
+                            AND last_seen_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+                      )
+                      AND EXISTS (
+                          SELECT 1 FROM iam_user_service_access_health
+                          WHERE singleton
+                            AND last_seen_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+                      );
+                """, (KNOWLEDGE_CLIENT_ID, key_hash))
+            else:
+                cur.execute("""
+                    SELECT api_key.user_id, api_key.expires_at
+                    FROM knowledge_api_keys api_key
+                    JOIN knowledge_users knowledge_user ON knowledge_user.user_id = api_key.user_id
+                    WHERE api_key.api_key_hash = %s
+                      AND api_key.is_active
+                      AND knowledge_user.lifecycle_status = 'ACTIVE'
+                      AND EXISTS (
+                          SELECT 1 FROM iam_user_lifecycle_health
+                          WHERE singleton
+                            AND last_seen_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+                      );
+                """, (key_hash,))
             row = cur.fetchone()
             
             if row:

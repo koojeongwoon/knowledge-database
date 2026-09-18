@@ -41,6 +41,7 @@ class TokenSet:
     email: str
     name: str = ""
     user_version: int = 1
+    service_access_version: Optional[int] = None
     id_token: str = ""
 
 
@@ -320,6 +321,7 @@ class ServerSessionStore:
             email=claims["email"],
             name=claims.get("name", ""),
             user_version=int(claims.get("user_version", 1)),
+            service_access_version=int(claims["service_access_version"]) if "service_access_version" in claims else None,
             id_token=payload.get("id_token") or id_token,
         )
 

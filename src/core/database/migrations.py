@@ -1067,6 +1067,42 @@ def _add_iam_user_lifecycle_inbox(cur) -> None:
     """)
 
 
+def _add_iam_user_service_access_inbox(cur) -> None:
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS iam_user_service_access_states (
+            tenant_id VARCHAR(100) NOT NULL,
+            subject_id VARCHAR(255) NOT NULL,
+            client_id VARCHAR(255) NOT NULL,
+            service_access_status VARCHAR(20) NOT NULL
+                CHECK (service_access_status IN ('ACTIVE', 'DISABLED', 'WITHDRAWN')),
+            access_version BIGINT NOT NULL,
+            last_event_id VARCHAR(100) NOT NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, subject_id, client_id)
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS iam_user_service_access_events (
+            event_id VARCHAR(100) PRIMARY KEY,
+            tenant_id VARCHAR(100) NOT NULL,
+            subject_id VARCHAR(255) NOT NULL,
+            client_id VARCHAR(255) NOT NULL,
+            access_version BIGINT NOT NULL,
+            processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS iam_user_service_access_health (
+            singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+            last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL
+        );
+    """)
+    cur.execute("""
+        INSERT INTO iam_user_service_access_health(singleton, last_seen_at)
+        VALUES (TRUE, CURRENT_TIMESTAMP) ON CONFLICT (singleton) DO NOTHING;
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -1096,6 +1132,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(26, "clear_legacy_llm_api_key_columns", _clear_legacy_llm_api_key_columns),
     Migration(27, "add_user_lifecycle_identity", _add_user_lifecycle_identity),
     Migration(28, "add_iam_user_lifecycle_inbox", _add_iam_user_lifecycle_inbox),
+    Migration(29, "add_iam_user_service_access_inbox", _add_iam_user_service_access_inbox),
 )
 
 

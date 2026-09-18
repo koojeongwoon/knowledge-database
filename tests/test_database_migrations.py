@@ -84,7 +84,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertIn("ADD COLUMN IF NOT EXISTS tenant_id", sql)
         self.assertIn("uq_knowledge_users_tenant_subject", sql)
         self.assertNotIn("ADD COLUMN IF NOT EXISTS embedding_api_key_encrypted", sql)
-        self.assertIn("ADD COLUMN IF NOT EXISTS llm_model_name", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS iam_user_service_access_states", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS knowledge_schema_migrations", sql)
         self.assertIn("SELECT pg_advisory_xact_lock", sql)
 
