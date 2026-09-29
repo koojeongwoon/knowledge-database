@@ -46,10 +46,5 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Cleanup old knowledge image versions (Keep latest 3)
-        uses: actions/delete-package-versions@v5
-        continue-on-error: true
-        with:
-          package-name: 'knowledge'
-          package-type: 'container'
-          min-versions-to-keep: 3
+      # Retention must preserve every manifest referenced by deployed images.
+      # Count-based deletion can remove a tag still used by a k3s workload.

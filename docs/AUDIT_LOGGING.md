@@ -65,7 +65,7 @@ DB payload의 `_audit_delivery.event_id`와 `recorded_at`으로 같은 원본 �
 
 **운영 전제:** outbox 파일이 있는 디렉토리를 영속 볼륨에 연결해야 Pod 교체 후에도 유지됩니다.
 k3s 매니페스트에 서버와 인덱싱 워커 각각의 PVC와 `/app/logs` 마운트를 추가했습니다.
-설정 변경과 로컬 검증은 완료했으며 운영 적용·PVC 바인딩·실제 Pod 교체 검증은 아직 수행하지 않았습니다.
+2026-09-29 운영 적용·두 PVC의 바인딩·서버의 실제 Pod 교체 후 재전송 검증을 완료했습니다.
 여러 프로세스가 outbox를 공유하면 lease로 전송을 조정하지만 기존 회전 로그 파일은
 다중 프로세스 회전을 지원하지 않으므로 파일 기록 경로는 프로세스별로 운영해야 합니다.
 
@@ -96,8 +96,8 @@ local-path는 노드의 로컬 디스크를 사용합니다. 같은 디스크를
 근거: [Kubernetes PV 수명주기](https://kubernetes.io/docs/concepts/storage/persistent-volumes/),
 [local-path-provisioner 제한](https://github.com/rancher/local-path-provisioner#cons).
 
-운영 적용은 outbox 소스가 포함된 새 이미지 배포와 함께 진행해야 합니다.
-현재 매니페스트의 이미지 태그는 이번 소스 변경 이전 값이며 이번 단계에서 교체하지 않았습니다.
+운영 적용은 outbox 소스가 포함된 새 이미지 배포와 함께 진행합니다.
+현재 매니페스트에는 검증한 소스 커밋 `8e1c009847a69b7b40a0ae18971cbf8c37d0ecec` 이미지가 반영되어 있습니다.
 적용 후 운영 클러스터에서 다음을 확인합니다.
 
 ```sh
@@ -112,6 +112,40 @@ kubectl -n llm-wiki exec deployment/mcp-server -c mcp-app -- \
 미전송 기록이 Pod 교체 후 같은 event_id로 DB에 전송되는 것입니다. 파일 존재·Pod Ready만으로
 재전송 검증을 대신하지 않습니다. 최초 마운트는 이전 컨테이너의 `/app/logs`를 가리므로 기존
 미전송 기록이 있다면 최초 교체 전에 별도 보관해야 합니다.
+
+### 2026-09-29 운영 검증 결과
+
+- 소스·이미지 커밋: `8e1c009847a69b7b40a0ae18971cbf8c37d0ecec`.
+  [ARM64 이미지 CI](https://github.com/koojeongwoon/knowledge-database/actions/runs/36511787928) 성공.
+- GitOps 커밋: `236583244ee124400cefe09ca57df448553802a0`.
+  Argo CD `app-llm-wiki`는 해당 revision에서 `Synced / Healthy`를 확인했습니다.
+- 서버·워커의 실제 imageID:
+  `sha256:4fc25e51df5cb83ec271f5ccf4ff3282c0bcb3be9ff809687a97c228e5338c55`.
+  레지스트리 OCI index digest와 일치합니다.
+- 두 PVC는 Bound이며 서버의 `/app/logs` 마운트와 워커의 `indexing-audit-logs` 연결을 확인했습니다.
+  새 워커 Job `knowledge-indexing-worker-29844141`의 종료 코드는 0입니다.
+- 서버 Pod를 `mcp-server-df68b449-v9626`에서 `mcp-server-df68b449-jv8dz`로 실제 교체했습니다.
+  UID도 `8d5a53e4-21b4-49a1-a764-bf8598b65638`에서
+  `e9b09e0a-1fc1-448e-99d2-94ee35429db9`로 변경됐습니다.
+- 합성 기록 `1de2965f-fd1b-4245-81ef-6fe65ff444d0`은 실제 `log_audit()`와 운영 outbox에 등록했습니다.
+  검증 프로세스의 SQLite TEMP trigger로 이 기록만 전송을 미뤘고,
+  교체 후 동일 해시를 확인해 지연을 해제했습니다. 새 서버의 전송 작업자가 DB 커밋 후 삭제했습니다.
+- 합성 기록 `607bd7fe-8fd6-49b6-8db9-a6c3b0907aeb`은 같은 PVC의 별도 검증 outbox에 등록했습니다.
+  검증용 PostgreSQL 연결의 search_path만 `pg_temp`로 바꿔 실제 `UndefinedTable` 실패와 재시도를
+  확인했습니다. Pod 교체 후 동일 해시와 시도 횟수 1을 확인했고 정상 연결로 전송해 삭제했습니다.
+  운영 DB 전체나 다른 연결에는 장애를 주지 않았습니다.
+- 두 event_id는 DB에서 각각 1건 확인됐고 해당 대기 기록은 모두 0건이 됐습니다.
+  합성 DB 감사 기록은 검증 증거로 남기며 별도 검증 SQLite 파일은 성공 후 제거했습니다.
+- 교체 후 두 외부 호스트의 헬스는 200, 미인증 MCP 요청은 401입니다.
+  로그인은 302 → 302 → IAM 로그인 페이지 200까지 확인했습니다. 사용자 로그인 완료 시험은 포함하지 않습니다.
+- 최초 교체 전 기존 로그는 노드의
+  `/home/ubuntu/knowledge-audit-rollout-20260929/audit-logs-before-pvc.tar`에 권한을 제한해 보관했습니다.
+- 기존 CI의 이미지 정리 단계는 사용 중인 태그를 구분하지 않았고 구 이미지 태그는 레지스트리에서
+  NotFound였습니다. 시작하지 못한 구 워커 Job을 정리해 예약 실행을 복구했고,
+  운영 이미지·연결된 OCI manifest를 보존할 수 없는 개수 기반 자동 삭제 단계는 제거했습니다.
+
+이 검증은 같은 운영 노드·디스크에서 서버 Pod를 정상 종료해 교체한 경우입니다.
+노드·디스크 손실, 전원 장애, 워커 Pod의 강제 중단까지 검증한 것은 아닙니다.
 
 ## 상태 확인과 검증
 
@@ -135,7 +169,7 @@ DB 대기 항목 수·바이트·상한과 원인별 카운터를 읽을 수 있
 - k3s 영속 볼륨 설정: `kubectl kustomize namespaces/llm-wiki` 렌더링과 두 PVC의
   namespace·참조·마운트·outbox 환경 변수, Retain 클래스와 실행 정책 연결을 확인했습니다.
   별도 프로세스가 outbox 커밋 후 `os._exit()`로 종료된 뒤 새 프로세스가 같은 파일의 기록을
-  전달하고 acknowledge하는 로컬 검증을 통과했습니다. 실제 PV·Pod 교체 시험은 포함하지 않습니다.
+  전달하고 acknowledge하는 로컬 검증을 통과했습니다. 실제 PV·Pod 검증은 위 운영 결과에 기록했습니다.
 - 5,000건 포화 검증: 파일 큐 32개, outbox 128 KiB·100건으로 설정하고 DB 소비를 중단했습니다.
   대기 값은 32개와 97건·130,940바이트에서 제한됐고 파일 기록 5,000건이 모두 남았습니다.
   다섯 반복의 `tracemalloc` 현재 할당량은 약 215~217 KiB, 프로세스 최대 RSS는 약 46.5 MiB였습니다.
