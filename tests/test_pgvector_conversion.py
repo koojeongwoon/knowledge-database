@@ -11,13 +11,16 @@ class _Cursor:
     def execute(self, query, params):
         pass
 
+    def __iter__(self):
+        yield (0, "content", Vector([0.1, 0.2, 0.3]))
+
     def fetchall(self):
-        return [(0, "content", Vector([0.1, 0.2, 0.3]))]
+        raise AssertionError("Chunk reads must not call fetchall().")
 
 
 class _DatabaseManager:
     @contextmanager
-    def cursor(self):
+    def streaming_cursor(self):
         yield _Cursor()
 
 

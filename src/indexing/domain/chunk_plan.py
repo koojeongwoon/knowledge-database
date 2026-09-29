@@ -4,19 +4,19 @@ from typing import Any, Callable, Mapping, Sequence
 from src.indexing.domain.model import Chunk
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ReusedChunk:
     chunk: Chunk
     embedding: tuple[float, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PendingChunk:
     chunk: Chunk
     embedding_text: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DocumentChunkPlan:
     reused: tuple[ReusedChunk, ...] = ()
     pending: tuple[PendingChunk, ...] = ()

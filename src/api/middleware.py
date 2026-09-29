@@ -125,7 +125,7 @@ async def _validate_api_key_cached(token: str) -> dict:
             if expires_at_str:
                 expires_dt = datetime.fromisoformat(expires_at_str)
                 if expires_dt <= datetime.now(timezone.utc):
-                    log_audit("AUTHENTICATE_EXPIRED", "FAILED", user_id=result.get("user_id", token))
+                    log_audit("AUTHENTICATE_EXPIRED", "FAILED", user_id=result.get("user_id", "UNKNOWN"))
                     # 만료되었을 경우 캐시 즉시 제거
                     cache_manager.delete(cache_key)
                     return None
@@ -154,7 +154,7 @@ async def _validate_api_key_cached(token: str) -> dict:
         log_audit("AUTHENTICATE_LOCAL_DB", "SUCCESS", user_id=result["user_id"])
         return result
         
-    log_audit("AUTHENTICATE", "FAILED", user_id=token, payload={"reason": "Invalid or expired API Key"})
+    log_audit("AUTHENTICATE", "FAILED", user_id="UNKNOWN", payload={"reason": "Invalid or expired API Key"})
     return None
 
 def _extract_user_config(headers: dict) -> dict:

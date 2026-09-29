@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, Cookie, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from src.settings.oauth_session import OAuthSessionError
+from src.settings.oauth_session import OAuthSessionError, OAuthSessionUnavailable
 
 
 logger = logging.getLogger("settings_auth")
@@ -41,6 +41,13 @@ def create_auth_router(
             verifier = store.consume_login(state)
             payload = await store.oauth_client.exchange_code(code, verifier)
             session_id = store.create(payload)
+        except OAuthSessionUnavailable as exc:
+            logger.warning("OAuth callback failed: error_type=%s", type(exc).__name__)
+            return HTMLResponse(
+                "로그인 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                status_code=503,
+                headers={"Retry-After": "5", "Cache-Control": "no-store"},
+            )
         except OAuthSessionError as exc:
             logger.warning("OAuth callback failed: error_type=%s", type(exc).__name__)
             return HTMLResponse("로그인 세션을 만들지 못했습니다. 다시 시도해 주세요.", status_code=401)

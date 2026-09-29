@@ -16,7 +16,7 @@ class IndexingStats(TypedDict):
     skipped: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FileIndexingResult:
     file_path: str
     outcome: FileIndexingOutcome
@@ -31,7 +31,7 @@ class FileIndexingResult:
             raise ValueError("Successful file indexing result cannot contain an error message.")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FileIndexingBatchResult:
     items: tuple[FileIndexingResult, ...] = ()
 

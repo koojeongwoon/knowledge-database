@@ -2,7 +2,11 @@ import asyncio
 import os
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import redis
+
+from src.core.cache.redis import RedisCacheManager
 
 from src.settings.oauth_session import (
     OAuthClient,
@@ -62,6 +66,91 @@ class OAuthSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.consume_login(state), verifier)
         with self.assertRaises(OAuthSessionExpired):
             self.store.consume_login(state)
+
+    async def test_redis_failure_is_unavailable_instead_of_expired(self):
+        cache = RedisCacheManager(host="127.0.0.1", port=6379)
+        self.store.cache = cache
+        with patch.object(cache.client, "get", side_effect=redis.ConnectionError("redis unavailable")):
+            with self.assertRaises(OAuthSessionUnavailable):
+                await self.store.resolve("opaque-session")
+        self.oauth.refresh.assert_not_awaited()
+
+    async def test_missing_redis_session_is_still_expired(self):
+        cache = RedisCacheManager(host="127.0.0.1", port=6379)
+        self.store.cache = cache
+        with patch.object(cache.client, "get", return_value=None):
+            with self.assertRaises(OAuthSessionExpired):
+                await self.store.resolve("missing")
+
+    def test_login_state_redis_failure_is_unavailable(self):
+        self.cache.client = Mock()
+        self.cache.client.getdel.side_effect = redis.TimeoutError("redis timeout")
+        with self.assertRaises(OAuthSessionUnavailable):
+            self.store.consume_login("state")
+
+    @patch("src.settings.oauth_session.verify_auth_token")
+    async def test_failed_refresh_preserves_session_for_retry_after_recovery(self, verify_token):
+        now = int(time.time())
+        verify_token.side_effect = [verified_claims(now - 1), verified_claims(now + 3600)]
+        session_id = self.store.create({"access_token": "old-access", "refresh_token": "old-refresh"})
+        self.oauth.refresh.side_effect = [
+            OAuthSessionUnavailable("temporary outage"),
+            {"access_token": "new-access", "refresh_token": "new-refresh"},
+        ]
+        with self.assertRaises(OAuthSessionUnavailable):
+            await self.store.resolve(session_id)
+        self.assertIn(self.store.SESSION_PREFIX + self.store._hash(session_id), self.cache.values)
+        resolved = await self.store.resolve(session_id)
+        self.assertEqual(resolved.access_token, "new-access")
+
+    @patch("src.settings.oauth_session.verify_auth_token")
+    async def test_valid_access_token_is_loaded_once_without_acquiring_lock(self, verify_token):
+        verify_token.return_value = verified_claims(int(time.time()) + 3600)
+        session_id = self.store.create({"access_token": "access", "refresh_token": "refresh"})
+        with patch.object(self.store, "_load", wraps=self.store._load) as load:
+            with patch.object(self.store, "_get_lock") as get_lock:
+                resolved = await self.store.resolve(session_id)
+        self.assertEqual(resolved.access_token, "access")
+        load.assert_called_once_with(session_id)
+        get_lock.assert_not_called()
+
+    async def test_lock_identity_survives_churn_revoke_and_waiter_handoff(self):
+        lock = self.store._get_lock("target")
+        await lock.acquire()
+        entered = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def waiter():
+            async with self.store._get_lock("target"):
+                entered.set()
+                await finish.wait()
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+        lock.release()
+        # Exercise the interval between release and the waiter's wakeup.
+        for index in range(10000):
+            self.store._get_lock(str(index))
+        self.store.revoke("target")
+        self.assertIs(self.store._get_lock("target"), lock)
+        self.assertEqual(len(self.store._locks), 256)
+        await entered.wait()
+        self.assertTrue(lock.locked())
+        finish.set()
+        await task
+        self.assertFalse(lock.locked())
+
+    async def test_cancelled_waiter_does_not_prevent_later_acquisition(self):
+        lock = self.store._get_lock("target")
+        await lock.acquire()
+        waiter = asyncio.create_task(lock.acquire())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        lock.release()
+        async with self.store._get_lock("target"):
+            self.assertTrue(lock.locked())
 
     @patch("src.settings.oauth_session.verify_auth_token")
     async def test_expiring_access_token_is_refreshed_and_rotated(self, verify_token):

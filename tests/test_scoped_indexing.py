@@ -174,6 +174,35 @@ class ScopedIndexingTests(unittest.TestCase):
         self.indexer.repository.delete_document.assert_not_called()
         self.assertEqual(parse_markdown.call_count, 1)
 
+    @patch("src.wiki.domain.parser.chunk_text", return_value=["unchanged chunk"])
+    @patch(
+        "src.wiki.domain.parser.split_markdown_by_headers",
+        return_value=[{"header": "Intro", "content": "unchanged chunk"}],
+    )
+    @patch("src.wiki.domain.parser.extract_wiki_links", return_value=[])
+    @patch("src.indexing.application.service.parse_markdown_content")
+    def test_streamed_existing_embedding_is_reused_without_embedding_request(
+        self, parse_markdown, _extract_links, _split_headers, _chunk_text,
+    ):
+        parse_markdown.return_value = {
+            "content_hash": "new-hash", "frontmatter": {}, "body": "unchanged chunk",
+        }
+        repo = self.indexer.repository
+        repo.iter_document_chunks.return_value = iter([
+            {"chunk_index": 0, "content": "unchanged chunk", "embedding": [0.3, 0.4]},
+        ])
+        self.indexer.storage.read_text.return_value = "document"
+        self.indexer.embedding_service = MagicMock()
+        self.indexer.topic_metadata = {}
+        self.indexer.ontology_shadow_factory = MagicMock()
+
+        result = self.indexer._process_single_file("qa/changed.md", False, self.indexer.db_manager)
+
+        self.assertIs(result, FileIndexingOutcome.UPDATED)
+        self.indexer.embedding_service.embed_batch.assert_not_called()
+        repo.get_document_chunks.assert_not_called()
+        self.assertEqual(repo.replace_document.call_args.args[1][0]["embedding"], [0.3, 0.4])
+
     @patch("src.wiki.domain.parser.chunk_text", return_value=["changed chunk"])
     @patch(
         "src.wiki.domain.parser.split_markdown_by_headers",
@@ -194,7 +223,7 @@ class ScopedIndexingTests(unittest.TestCase):
             "body": "changed chunk",
         }
         repo = self.indexer.repository
-        repo.get_document_chunks.return_value = []
+        repo.iter_document_chunks.return_value = iter(())
         self.indexer.storage.read_text.return_value = "changed chunk"
         self.indexer.embedding_service = MagicMock()
         self.indexer.embedding_service.embed_batch.side_effect = RuntimeError("embedding failed")
@@ -227,7 +256,7 @@ class ScopedIndexingTests(unittest.TestCase):
             "body": "changed chunk",
         }
         repo = self.indexer.repository
-        repo.get_document_chunks.return_value = []
+        repo.iter_document_chunks.return_value = iter(())
         self.indexer.storage.read_text.return_value = "changed chunk"
         self.indexer.embedding_service = MagicMock()
         self.indexer.embedding_service.embed_batch.return_value = [[0.1, 0.2]]

@@ -16,7 +16,8 @@ class S3StorageManager(BaseStorageManager):
         self.bucket_name = bucket_name
         
         # boto3 S3 클라이언트 초기화
-        self.s3_client = boto3.client(
+        # Each concurrently constructed manager owns its Boto3 session.
+        self.s3_client = boto3.session.Session().client(
             "s3",
             endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key_id,

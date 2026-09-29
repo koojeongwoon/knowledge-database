@@ -119,8 +119,11 @@ class WikiIndexer:
         ))
 
         # 삭제 전에 기존 임베딩을 읽어 동일한 청크의 임베딩을 재사용합니다.
-        existing_chunks = repo.get_document_chunks(rel_path)
-        existing_map = {c["content"]: c["embedding"] for c in existing_chunks if c.get("embedding")}
+        existing_map = {
+            c["content"]: c["embedding"]
+            for c in repo.iter_document_chunks(rel_path)
+            if c.get("embedding")
+        }
 
         # 본문 내 [[WikiLink]] 추출하여 엣지(관계) 저장
         wiki_links = extract_wiki_links(parsed_data["body"])

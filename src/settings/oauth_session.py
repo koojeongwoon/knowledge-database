@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 from dataclasses import asdict, dataclass
-from typing import Dict, Optional
+from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -145,6 +145,7 @@ class ServerSessionStore:
     SESSION_PREFIX = "knowledge:web-session:"
     LOGIN_PREFIX = "knowledge:oauth-login:"
     LOCK_PREFIX = "knowledge:web-session-lock:"
+    LOCAL_LOCK_COUNT = 256
 
     def __init__(self, cache=None, oauth_client=None):
         self.cache = cache or AppCacheManager()
@@ -152,7 +153,8 @@ class ServerSessionStore:
         self.session_ttl = int(os.getenv("KNOWLEDGE_SESSION_TTL_SECONDS", "2592000"))
         self.login_ttl = int(os.getenv("OAUTH_LOGIN_TTL_SECONDS", "300"))
         self.refresh_skew = int(os.getenv("ACCESS_TOKEN_REFRESH_SKEW_SECONDS", "120"))
-        self._locks: Dict[str, asyncio.Lock] = {}
+        # Fixed stripes keep lock identity stable for holders and waiters.
+        self._locks = tuple(asyncio.Lock() for _ in range(self.LOCAL_LOCK_COUNT))
 
     def begin_login(self) -> tuple[str, str, str]:
         state = secrets.token_urlsafe(32)
@@ -167,7 +169,10 @@ class ServerSessionStore:
     def consume_login(self, state: str) -> str:
         key = self.LOGIN_PREFIX + self._hash(state)
         client = getattr(self.cache, "client", None)
-        encrypted = client.getdel(key) if client is not None else self.cache.get(key)
+        try:
+            encrypted = client.getdel(key) if client is not None else self.cache.get(key)
+        except Exception as exc:
+            raise OAuthSessionUnavailable("로그인 상태 저장소를 사용할 수 없습니다.") from exc
         if client is None and encrypted:
             self.cache.delete(key)
         if not encrypted:
@@ -199,13 +204,17 @@ class ServerSessionStore:
             raise OAuthSessionExpired("로그인 세션이 만료되었습니다.")
         if token_set.access_token_expires_at - now > self.refresh_skew:
             return token_set
-        lock = self._locks.setdefault(self._hash(session_id), asyncio.Lock())
+        lock = self._get_lock(session_id)
         async with lock:
             token_set = self._load(session_id)
             now = int(time.time())
             if token_set.access_token_expires_at - now > self.refresh_skew:
                 return token_set
             return await self._refresh(session_id, token_set)
+
+    def _get_lock(self, session_id: str) -> asyncio.Lock:
+        index = int(self._hash(session_id), 16) % self.LOCAL_LOCK_COUNT
+        return self._locks[index]
 
     async def _refresh(self, session_id: str, current: TokenSet) -> TokenSet:
         distributed_token = secrets.token_urlsafe(16)
@@ -260,7 +269,8 @@ class ServerSessionStore:
                     pass
 
     def revoke(self, session_id: str) -> None:
-        session_key = self.SESSION_PREFIX + self._hash(session_id)
+        hashed = self._hash(session_id)
+        session_key = self.SESSION_PREFIX + hashed
         try:
             token_set = self._load(session_id)
         except OAuthSessionError:
@@ -289,7 +299,13 @@ class ServerSessionStore:
         return self.oauth_client.logout_url(token_set.id_token), remotely_revoked
 
     def _load(self, session_id: str) -> TokenSet:
-        encrypted = self.cache.get(self.SESSION_PREFIX + self._hash(session_id))
+        key = self.SESSION_PREFIX + self._hash(session_id)
+        client = getattr(self.cache, "client", None)
+        try:
+            # A soft cache miss cannot distinguish Redis failure from expiry.
+            encrypted = client.get(key) if client is not None else self.cache.get(key)
+        except Exception as exc:
+            raise OAuthSessionUnavailable("로그인 세션 저장소를 사용할 수 없습니다.") from exc
         if not encrypted:
             raise OAuthSessionExpired("로그인 세션이 없거나 만료되었습니다.")
         try:

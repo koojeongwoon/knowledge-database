@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from src.settings.service import UserSettingsService
 from src.settings.web import SettingsPathDispatcher, settings_app
 from src.api_keys.auth import _jwk_client
+from src.settings.oauth_session import OAuthSessionExpired, OAuthSessionUnavailable
 
 
 class SettingsWebTests(unittest.TestCase):
@@ -89,6 +90,59 @@ class SettingsWebTests(unittest.TestCase):
         self.assertIn("LLM-Wiki 설정", response.text)
         self.assertIn("등록·수정", response.text)
         self.store.resolve.assert_awaited_once_with("opaque-session")
+
+    def test_temporary_auth_outage_preserves_page_cookie_and_recovers(self):
+        self.authenticate()
+        self.store.resolve.side_effect = OAuthSessionUnavailable("sensitive-outage-detail")
+        response = self.client.get("/settings", follow_redirects=False)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["retry-after"], "5")
+        self.assertNotIn("set-cookie", response.headers)
+        self.assertNotIn("location", response.headers)
+        self.assertNotIn("sensitive-outage-detail", response.text)
+        self.assertEqual(self.client.cookies.get("knowledge_session"), "opaque-session")
+        self.store.resolve.side_effect = None
+        self.assertEqual(self.client.get("/settings").status_code, 200)
+
+    def test_expired_page_session_still_clears_cookie_and_redirects(self):
+        self.authenticate()
+        self.store.resolve.side_effect = OAuthSessionExpired("expired")
+        response = self.client.get("/settings", follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["location"], "/login")
+        self.assertIn("Max-Age=0", response.headers["set-cookie"])
+
+    @patch("src.settings.web.ApiKeyService")
+    @patch("src.settings.web.UserSettingsService")
+    def test_temporary_auth_outage_rejects_both_api_auth_paths_without_401(
+        self, settings_service, api_key_service,
+    ):
+        self.authenticate()
+        self.store.resolve.side_effect = OAuthSessionUnavailable("sensitive-outage-detail")
+        for path in ("/api/settings", "/api/keys"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 503)
+                self.assertNotIn("set-cookie", response.headers)
+                self.assertEqual(response.headers["retry-after"], "5")
+                self.assertNotIn("sensitive-outage-detail", response.text)
+        settings_service.assert_not_called()
+        api_key_service.assert_not_called()
+
+    def test_expired_api_sessions_still_return_401(self):
+        self.authenticate()
+        self.store.resolve.side_effect = OAuthSessionExpired("expired")
+        for path in ("/api/settings", "/api/keys"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, 401)
+
+    def test_callback_outage_returns_503_without_replacing_existing_cookie(self):
+        self.authenticate()
+        self.store.oauth_client.exchange_code.side_effect = OAuthSessionUnavailable("sensitive-outage-detail")
+        response = self.client.get("/callback?code=code&state=state", follow_redirects=False)
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("set-cookie", response.headers)
+        self.assertNotIn("sensitive-outage-detail", response.text)
 
     def test_settings_edit_is_separate_from_read_only_page(self):
         self.authenticate()

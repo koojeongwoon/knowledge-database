@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 from src.wiki.domain.synthesis import slugify
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResourceSummary:
     file_path: str
     summary_type: str = "DocumentSummary"
@@ -37,7 +37,7 @@ class ResourceSummary:
         }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class KnowledgeCommitCommand:
     title: str
     description: str
@@ -51,7 +51,7 @@ class KnowledgeCommitCommand:
     visibility: str = "public"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class KnowledgeCommitPlan:
     command: KnowledgeCommitCommand
     timestamp: datetime.datetime
@@ -61,7 +61,7 @@ class KnowledgeCommitPlan:
     resource_summaries: tuple[ResourceSummary, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class KnowledgeCommitResult:
     qa_file_path: str
     topic_file_path: str | None

@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Iterator
 
 from src.indexing.domain.repository import BaseIndexingRepository
 
@@ -27,19 +27,18 @@ class PostgresIndexingRepository(BaseIndexingRepository):
 
     def get_all_file_hashes(self) -> Dict[str, str]:
         owner_id = self._get_owner_id()
-        with self.db_manager.cursor() as cur:
+        with self.db_manager.streaming_cursor() as cur:
             cur.execute(
                 "SELECT DISTINCT file_path, content_hash FROM knowledge_documents WHERE owner_id = %s;",
                 (owner_id,)
             )
-            rows = cur.fetchall()
-            return {row[0]: row[1] for row in rows}
+            return {row[0]: row[1] for row in cur}
 
     def get_file_hashes(self, file_paths: List[str]) -> Dict[str, str]:
         if not file_paths:
             return {}
         owner_id = self._get_owner_id()
-        with self.db_manager.cursor() as cur:
+        with self.db_manager.streaming_cursor() as cur:
             cur.execute(
                 """
                 SELECT DISTINCT file_path, content_hash
@@ -48,8 +47,7 @@ class PostgresIndexingRepository(BaseIndexingRepository):
                 """,
                 (owner_id, file_paths)
             )
-            rows = cur.fetchall()
-            return {row[0]: row[1] for row in rows}
+            return {row[0]: row[1] for row in cur}
 
     def upsert_document_chunk(self, doc_data: Dict[str, Any]):
         owner_id = self._get_owner_id()
@@ -197,15 +195,16 @@ class PostgresIndexingRepository(BaseIndexingRepository):
             return None
 
     def get_document_chunks(self, file_path: str) -> List[Dict[str, Any]]:
+        return list(self.iter_document_chunks(file_path))
+
+    def iter_document_chunks(self, file_path: str) -> Iterator[Dict[str, Any]]:
         owner_id = self._get_owner_id()
-        with self.db_manager.cursor() as cur:
+        with self.db_manager.streaming_cursor() as cur:
             cur.execute(
                 "SELECT chunk_index, content, embedding FROM knowledge_documents WHERE file_path = %s AND owner_id = %s ORDER BY chunk_index ASC;",
                 (file_path, owner_id)
             )
-            rows = cur.fetchall()
-            chunks = []
-            for row in rows:
+            for row in cur:
                 idx, content, emb = row
                 # Handle possible string representation of postgres vector type
                 if isinstance(emb, str):
@@ -219,12 +218,11 @@ class PostgresIndexingRepository(BaseIndexingRepository):
                     emb = emb.to_list()
                 elif hasattr(emb, 'tolist'):
                     emb = emb.tolist()
-                chunks.append({
+                yield {
                     "chunk_index": idx,
                     "content": content,
                     "embedding": emb
-                })
-            return chunks
+                }
 
     def replace_document(
         self,

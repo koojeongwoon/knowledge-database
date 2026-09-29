@@ -19,6 +19,7 @@ from src.learning.application.dashboard import LearningDashboardService
 from src.learning.infrastructure.dashboard_repository import LearningDashboardRepository
 from src.settings.oauth_session import (
     OAuthSessionError,
+    OAuthSessionExpired,
     session_store,
 )
 from src.settings.web_embeddings import create_embedding_router
@@ -53,8 +54,14 @@ async def _authenticated_user(authorization: Optional[str], session_token: Optio
         try:
             token_set = await session_store().resolve(session_token)
             return ApiKeyService().get_or_create_user(_session_identity(token_set))
-        except OAuthSessionError as exc:
+        except OAuthSessionExpired as exc:
             raise HTTPException(status_code=401, detail="로그인 세션이 만료되었습니다.") from exc
+        except OAuthSessionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="인증 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                headers={"Retry-After": "5"},
+            ) from exc
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
     result = await _validate_api_key_cached(authorization.split(" ", 1)[1].strip())
@@ -78,8 +85,14 @@ async def _authenticated_auth_id(authorization: Optional[str], session_token: Op
     if session_token:
         try:
             return _session_identity(await session_store().resolve(session_token))
-        except OAuthSessionError as exc:
+        except OAuthSessionExpired as exc:
             raise HTTPException(status_code=401, detail="로그인 세션이 만료되었습니다.") from exc
+        except OAuthSessionError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="인증 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                headers={"Retry-After": "5"},
+            ) from exc
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="인증서버 로그인 토큰이 필요합니다.")
     try:

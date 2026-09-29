@@ -15,7 +15,7 @@ ALLOWED_PREDICATES = frozenset({
 })
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Concept:
     concept_id: str
     canonical_name: str
@@ -32,7 +32,7 @@ class Concept:
             raise ValueError(f"Unsupported concept status: {self.status}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Relation:
     subject: str
     predicate: str
@@ -71,7 +71,7 @@ class Relation:
             raise ValueError("Ontology relation valid_from cannot be later than valid_to.")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DocumentConcept:
     file_path: str
     concept_id: str
@@ -84,7 +84,7 @@ class DocumentConcept:
             raise ValueError("Document concept confidence must be between 0 and 1.")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OntologySnapshot:
     source_path: str
     concepts: tuple[Concept, ...] = ()

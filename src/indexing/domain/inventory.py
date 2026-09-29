@@ -2,7 +2,7 @@ import posixpath
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class InventoryDocument:
     file_path: str
     content_hash: str
@@ -11,20 +11,20 @@ class InventoryDocument:
     doc_type: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TopicMetadata:
     source_path: str | None = None
     doc_type: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TopicSyncCommand:
     topic_name: str
     category: str
     file_path: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class IndexingInventory:
     hash_entries: tuple[tuple[str, str], ...] = ()
     metadata_entries: tuple[tuple[str, TopicMetadata], ...] = ()

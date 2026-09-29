@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class IndexingPlan:
     """Immutable decision about how indexed files differ from stored files."""
 

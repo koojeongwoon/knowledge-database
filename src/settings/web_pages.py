@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, Cookie
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from src.settings.oauth_session import OAuthSessionError
+from src.settings.oauth_session import OAuthSessionError, OAuthSessionExpired
 
 
 def create_page_router(
@@ -19,10 +19,16 @@ def create_page_router(
             return RedirectResponse("/login", status_code=302)
         try:
             await session_store_factory().resolve(session_token)
-        except OAuthSessionError:
+        except OAuthSessionExpired:
             response = RedirectResponse("/login", status_code=302)
             response.delete_cookie(session_cookie, path="/")
             return response
+        except OAuthSessionError:
+            return HTMLResponse(
+                "인증 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+                status_code=503,
+                headers={"Retry-After": "5", "Cache-Control": "no-store"},
+            )
         return HTMLResponse((static_dir / filename).read_text(encoding="utf-8"))
 
     def page_route(filename: str):

@@ -71,6 +71,7 @@ scratch/
 *.log
 *.log.*
 *.pid
+logs/
 
 # Malware Scanner (screener) project
 malware-scanner/

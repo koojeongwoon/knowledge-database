@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     db_min_connections: int = Field(default=2, validation_alias="DB_MIN_CONNECTIONS")
     db_max_connections: int = Field(default=20, validation_alias="DB_MAX_CONNECTIONS")
 
+    audit_queue_size: int = Field(default=512, ge=1, validation_alias="AUDIT_QUEUE_SIZE")
+    audit_record_max_bytes: int = Field(default=16384, ge=1024, validation_alias="AUDIT_RECORD_MAX_BYTES")
+    audit_outbox_path: str = Field(default="logs/audit-outbox.sqlite3", validation_alias="AUDIT_OUTBOX_PATH")
+    audit_outbox_max_bytes: int = Field(default=67108864, ge=1024, validation_alias="AUDIT_OUTBOX_MAX_BYTES")
+    audit_outbox_max_events: int = Field(default=10000, ge=1, validation_alias="AUDIT_OUTBOX_MAX_EVENTS")
+
     # 임베딩 공급자 설정 (fake, openai, bge-m3)
     embedding_provider: str = Field(default="fake", validation_alias="EMBEDDING_PROVIDER")
     embedding_dim: Optional[int] = Field(default=None, validation_alias="EMBEDDING_DIM")

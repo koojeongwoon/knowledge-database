@@ -18,7 +18,7 @@ class IndexingEventKind(str, Enum):
 EventDetailValue: TypeAlias = str | int | float | bool | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class IndexingEvent:
     kind: IndexingEventKind
     message: str

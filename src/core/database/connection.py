@@ -1,6 +1,7 @@
 import psycopg
 import time
 import logging
+import uuid
 from contextlib import contextmanager
 from typing import Generator, Any
 from psycopg_pool import ConnectionPool, PoolTimeout
@@ -98,6 +99,25 @@ class PostgresDatabaseManager(BaseDatabaseManager):
             from src.api.exceptions import DatabaseException
             logger.error(f"Database query failed: {e}")
             raise DatabaseException(f"Database query failed: {e}") from e
+        finally:
+            self.close()
+
+    @contextmanager
+    def streaming_cursor(self, batch_size: int = 500) -> Generator[Any, None, None]:
+        """Keep a named cursor and its transaction alive only while consuming rows."""
+        if batch_size <= 0:
+            raise ValueError("Streaming batch size must be positive.")
+        self.connect()
+        try:
+            # Named cursors require a transaction even on an autocommit connection.
+            with self.conn.transaction():
+                with self.conn.cursor(name=f"knowledge_read_{uuid.uuid4().hex}") as cur:
+                    cur.itersize = batch_size
+                    yield cur
+        except Exception as e:
+            from src.api.exceptions import DatabaseException
+            logger.error(f"Database streaming query failed: {e}")
+            raise DatabaseException(f"Database streaming query failed: {e}") from e
         finally:
             self.close()
 

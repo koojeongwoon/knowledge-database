@@ -5,7 +5,7 @@ from typing import Any, Mapping, Sequence
 from src.indexing.domain.model import Edge
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DocumentMetadata:
     doc_type: str
     title: str

@@ -20,6 +20,12 @@ class BaseDatabaseManager(ABC):
         """커서를 빌려주고 자동으로 닫고 트랜잭션 커밋/롤백 및 예외 래핑을 관리하는 컨텍스트 매니저입니다."""
         pass
 
+    @contextmanager
+    def streaming_cursor(self, batch_size: int = 500) -> Generator[Any, None, None]:
+        """Read cursor; adapters may override this to bound driver-side buffering."""
+        with self.cursor() as cur:
+            yield cur
+
     @abstractmethod
     @contextmanager
     def transaction(self) -> Generator[Any, None, None]:

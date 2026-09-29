@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Iterator
 
 class BaseIndexingRepository(ABC):
     """지식 인덱싱 저장을 담당하는 도메인 인프라 인터페이스 계약"""
@@ -43,6 +43,10 @@ class BaseIndexingRepository(ABC):
     @abstractmethod
     def get_document_chunks(self, file_path: str) -> List[Dict[str, Any]]:
         pass
+
+    def iter_document_chunks(self, file_path: str) -> Iterator[Dict[str, Any]]:
+        """Compatibility path for adapters that return materialized chunks."""
+        yield from self.get_document_chunks(file_path)
 
     @abstractmethod
     def replace_document(
