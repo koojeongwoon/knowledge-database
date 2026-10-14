@@ -75,12 +75,14 @@ def apply_service_access_event(event, db_manager=None) -> tuple[bool, str | None
 
 
 class IamServiceAccessConsumer(threading.Thread):
-    def __init__(self, stream_client=None, db_manager_factory=DatabaseManager):
+    def __init__(self, stream_client=None, db_manager_factory=DatabaseManager, health_interval=25.0):
         super().__init__(daemon=True)
         self.redis_client = stream_client or StreamRedisClient()
         self.db_manager_factory = db_manager_factory
         self.consumer_name = f"knowledge-service-access-{id(self)}"
         self.running = True
+        self.health_interval = health_interval
+        self.last_health_update = 0.0
 
     def run(self):
         try:
@@ -100,10 +102,13 @@ class IamServiceAccessConsumer(threading.Thread):
                     groupname=SERVICE_ACCESS_GROUP, consumername=self.consumer_name,
                     streams={SERVICE_ACCESS_STREAM: ">"}, count=10, block=2000,
                 )
-                with self.db_manager_factory().transaction() as cur:
-                    cur.execute(
-                        "UPDATE iam_user_service_access_health SET last_seen_at = CURRENT_TIMESTAMP WHERE singleton"
-                    )
+                now = time.monotonic()
+                if now - self.last_health_update >= self.health_interval:
+                    with self.db_manager_factory().transaction() as cur:
+                        cur.execute(
+                            "UPDATE iam_user_service_access_health SET last_seen_at = CURRENT_TIMESTAMP WHERE singleton"
+                        )
+                    self.last_health_update = now
                 self._process_streams(streams or [])
             except Exception as error:
                 if self.running:

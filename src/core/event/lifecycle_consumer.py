@@ -88,12 +88,14 @@ def apply_user_lifecycle_event(event, db_manager=None) -> tuple[bool, str | None
 
 
 class IamUserLifecycleConsumer(threading.Thread):
-    def __init__(self, stream_client=None, db_manager_factory=DatabaseManager):
+    def __init__(self, stream_client=None, db_manager_factory=DatabaseManager, health_interval=25.0):
         super().__init__(daemon=True)
         self.redis_client = stream_client or StreamRedisClient()
         self.db_manager_factory = db_manager_factory
         self.consumer_name = f"knowledge-lifecycle-{id(self)}"
         self.running = True
+        self.health_interval = health_interval
+        self.last_health_update = 0.0
 
     def run(self):
         try:
@@ -113,10 +115,13 @@ class IamUserLifecycleConsumer(threading.Thread):
                     groupname=GROUP, consumername=self.consumer_name,
                     streams={STREAM: ">"}, count=10, block=2000,
                 )
-                with self.db_manager_factory().transaction() as cur:
-                    cur.execute(
-                        "UPDATE iam_user_lifecycle_health SET last_seen_at = CURRENT_TIMESTAMP WHERE singleton"
-                    )
+                now = time.monotonic()
+                if now - self.last_health_update >= self.health_interval:
+                    with self.db_manager_factory().transaction() as cur:
+                        cur.execute(
+                            "UPDATE iam_user_lifecycle_health SET last_seen_at = CURRENT_TIMESTAMP WHERE singleton"
+                        )
+                    self.last_health_update = now
                 self._process_streams(streams or [])
             except Exception as error:
                 if self.running:
