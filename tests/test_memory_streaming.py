@@ -54,6 +54,32 @@ class StreamingCursorTests(unittest.TestCase):
         self.manager.close.assert_called_once()
         self.cursor.fetchall.assert_not_called()
 
+    def test_pooled_connection_registers_vector_only_once(self):
+        from unittest.mock import patch
+        import src.core.database.connection as conn_mod
+
+        class FakeConn:
+            closed = False
+            autocommit = False
+
+            def cursor(self):
+                cur = MagicMock()
+                cur.__enter__.return_value.execute.return_value = None
+                return cur
+
+        fake_conn = FakeConn()
+        fake_pool = MagicMock()
+        fake_pool.getconn.return_value = fake_conn
+
+        with patch.object(conn_mod, "get_connection_pool", return_value=fake_pool), \
+             patch.object(conn_mod, "register_vector") as mock_register:
+            for _ in range(5):
+                mgr = PostgresDatabaseManager()
+                mgr.connect()
+                mgr.close()
+            self.assertEqual(mock_register.call_count, 1)
+            self.assertTrue(fake_conn.autocommit)
+
 
 TEST_DATABASE_URL = os.getenv("KNOWLEDGE_MEMORY_TEST_DATABASE_URL")
 

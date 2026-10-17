@@ -14,6 +14,19 @@ logger = logging.getLogger("database_pool")
 
 # 글로벌 커넥션 풀 선언 (Lazy Initialization)
 _connection_pool = None
+_VECTOR_REGISTERED_ATTR = "_knowledge_vector_registered"
+
+
+def _configure_connection(conn) -> None:
+    conn.autocommit = True
+    if getattr(conn, _VECTOR_REGISTERED_ATTR, False):
+        return
+    try:
+        register_vector(conn)
+        setattr(conn, _VECTOR_REGISTERED_ATTR, True)
+    except Exception:
+        pass
+
 
 def get_connection_pool() -> ConnectionPool:
     global _connection_pool
@@ -24,6 +37,7 @@ def get_connection_pool() -> ConnectionPool:
             min_size=DB_MIN_CONNECTIONS,
             max_size=DB_MAX_CONNECTIONS,
             timeout=3.0,
+            configure=_configure_connection,
             open=True
         )
     return _connection_pool
@@ -52,7 +66,6 @@ class PostgresDatabaseManager(BaseDatabaseManager):
                 pool = get_connection_pool()
                 # 1. 커넥션 풀에서 커넥션 획득 (내장 대기 시간 3초 활용)
                 self.conn = pool.getconn()
-                self.conn.autocommit = True
                 self._from_pool = True
                 
                 # 2. 대여받은 커넥션 생존 검증 (Test-On-Borrow)
@@ -60,20 +73,15 @@ class PostgresDatabaseManager(BaseDatabaseManager):
                     logger.warning("Borrowed connection was dead. Evicting and creating a new one.")
                     pool.putconn(self.conn)
                     self.conn = pool.getconn()
-                    self.conn.autocommit = True
                 
-                # pgvector 데이터 타입 등록
-                register_vector(self.conn)
+                # 물리 커넥션당 최초 1회만 pgvector 데이터 타입 등록
+                _configure_connection(self.conn)
             except Exception as e:
                 logger.error(f"Failed to lease connection from pool ({e}). Falling back to direct connection.")
                 # 풀 에러 발생 시 최후의 보루로 다이렉트 단일 연결로 폴백
                 self.conn = psycopg.connect(DATABASE_URL)
-                self.conn.autocommit = True
                 self._from_pool = False
-                try:
-                    register_vector(self.conn)
-                except Exception:
-                    pass
+                _configure_connection(self.conn)
 
     def close(self):
         if self.conn and not self.conn.closed:
