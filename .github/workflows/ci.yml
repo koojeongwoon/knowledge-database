@@ -11,10 +11,16 @@ permissions:
 
 jobs:
   build-knowledge:
+    if: (vars.BUILD_BACKEND == '' || vars.BUILD_BACKEND == 'github')
     name: Build Knowledge MCP Server (ARM64)
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+      - name: Shared hosted and PC test suite
+        run: bash scripts/test-build.sh
 
       - name: Generate Image Tag (KST Timestamp)
         id: meta
