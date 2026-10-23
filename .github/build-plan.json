@@ -1,0 +1,14 @@
+{
+  "repository": "koojeongwoon/knowledge-database",
+  "test": [
+    "bash",
+    "scripts/test-build.sh"
+  ],
+  "images": [
+    {
+      "image": "ghcr.io/koojeongwoon/knowledge",
+      "dockerfile": "Dockerfile",
+      "context": "."
+    }
+  ]
+}
