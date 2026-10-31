@@ -8,6 +8,7 @@ import time
 import uuid
 from collections import Counter
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
+from .queue_metrics import MeteredQueue, MeteredQueueListener, MeteredStreamHandler
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict
@@ -74,6 +75,7 @@ class AuditFileHandler(TimedRotatingFileHandler):
     def handleError(self, record):
         # Logging's default handler would print the full record on I/O failure.
         diagnostics.report("file_write_failed")
+        log_queue.telemetry.increment("output_errors")
 
 
 class BoundedAuditQueueHandler(QueueHandler):
@@ -107,28 +109,21 @@ class BoundedAuditQueueHandler(QueueHandler):
             self.queue.put_nowait(record)
         except queue.Full:
             self.diagnostics.report("file_queue_full_sync_write")
+            if hasattr(self.queue, "telemetry"):
+                self.queue.telemetry.increment("fallback")
             # Local backpressure preserves the record without allocating another
             # queue or doing network I/O on the request path.
             for handler in self.local_handlers:
                 handler.handle(record)
 
 
-class BoundedAuditQueueListener(QueueListener):
+class BoundedAuditQueueListener(MeteredQueueListener):
     def stop(self, timeout=1):
-        thread = self._thread
-        if thread is None:
-            return True
-        try:
-            self.queue.put(self._sentinel, timeout=timeout)
-        except queue.Full:
-            return False
-        thread.join(timeout)
-        if not thread.is_alive():
-            self._thread = None
-            return True
-        return False
+        return super().stop(timeout=timeout)
 
 
+
+log_queue = MeteredQueue(settings.audit_queue_size, "audit")
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 AUDIT_LOG_FILE = LOG_DIR / "audit.log"
@@ -136,7 +131,7 @@ logger = logging.getLogger("audit")
 logger.setLevel(logging.INFO)
 logger.handlers.clear()
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-stream_handler = logging.StreamHandler()
+stream_handler = MeteredStreamHandler(telemetry=log_queue.telemetry)
 stream_handler.setLevel(logging.INFO)
 stream_handler.setFormatter(formatter)
 diagnostics = AuditDiagnostics()
@@ -156,7 +151,6 @@ def _deliver(body):
 
 
 worker = AuditDeliveryWorker(outbox, _deliver, diagnostics.report)
-log_queue = queue.Queue(maxsize=settings.audit_queue_size)
 queue_handler = BoundedAuditQueueHandler(log_queue, outbox, worker, (file_handler, stream_handler), diagnostics)
 logger.addHandler(queue_handler)
 listener = BoundedAuditQueueListener(log_queue, file_handler, stream_handler, respect_handler_level=True)

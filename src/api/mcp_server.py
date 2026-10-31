@@ -413,7 +413,8 @@ mcp_http_app = mcp.streamable_http_app()
 
 # Streamable HTTP App에 순수 ASGI 미들웨어를 감싸서 최종 app 생성
 mcp_app = MCPAuthMiddleware(mcp_http_app)
-app = SettingsPathDispatcher(settings_app, mcp_app)
+from src.core.logging.queue_metrics import MetricsLifecycle
+app = MetricsLifecycle(SettingsPathDispatcher(settings_app, mcp_app))
 
 from src.core.event.lifecycle_consumer import IamUserLifecycleConsumer
 lifecycle_consumer = IamUserLifecycleConsumer()
