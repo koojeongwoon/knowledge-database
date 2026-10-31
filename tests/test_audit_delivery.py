@@ -82,7 +82,8 @@ def test_failed_delivery_is_retried_after_backoff(tmp_path):
 def test_full_file_queue_writes_synchronously_without_dropping_record(tmp_path):
     outbox = AuditOutbox(tmp_path / "audit.sqlite3", 1000, 4)
     local = logging.FileHandler(tmp_path / "audit.log")
-    q = queue.Queue(maxsize=1)
+    from src.core.logging.queue_metrics import MeteredQueue
+    q = MeteredQueue(1, "audit-fallback-test")
     diagnostics = audit.AuditDiagnostics()
     worker = Mock()
     handler = audit.BoundedAuditQueueHandler(q, outbox, worker, (local,), diagnostics)
@@ -93,6 +94,9 @@ def test_full_file_queue_writes_synchronously_without_dropping_record(tmp_path):
         assert '"event_id": "second"' in (tmp_path / "audit.log").read_text()
         assert outbox.usage()[0] == 2
         assert diagnostics.snapshot()["file_queue_full_sync_write"] == 1
+        counts, _ = q.telemetry.snapshot()
+        assert counts["full"] == counts["fallback"] == 1
+        assert counts.get("dropped_full", 0) == 0
         assert worker.wake.call_count == 2
     finally:
         local.close()
