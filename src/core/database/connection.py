@@ -49,6 +49,8 @@ def get_connection_pool() -> ConnectionPool:
 
 
 class PostgresDatabaseManager(BaseDatabaseManager):
+    schema_cache_key = DATABASE_URL
+
     def __init__(self):
         self.conn = None
         self._from_pool = False

@@ -12,6 +12,8 @@
 """
 
 import redis
+from functools import wraps
+from threading import Lock
 
 from src.core.cache.base import BaseCacheManager
 from src.core.cache.redis import RedisCacheManager
@@ -27,7 +29,21 @@ from src.core.config import (
     REDIS_STREAM_PASSWORD,
 )
 
+_clients = {}
+_clients_lock = Lock()
 
+
+def _shared_client(factory):
+    @wraps(factory)
+    def shared():
+        with _clients_lock:
+            if factory.__name__ not in _clients:
+                _clients[factory.__name__] = factory()
+            return _clients[factory.__name__]
+    return shared
+
+
+@_shared_client
 def WikiCacheManager() -> BaseCacheManager:
     """지식베이스 전용 Redis 캐시 매니저를 생성합니다.
 
@@ -42,6 +58,7 @@ def WikiCacheManager() -> BaseCacheManager:
     )
 
 
+@_shared_client
 def AppCacheManager() -> BaseCacheManager:
     """공용 애플리케이션 Redis 캐시 매니저를 생성합니다.
 
@@ -56,6 +73,7 @@ def AppCacheManager() -> BaseCacheManager:
     )
 
 
+@_shared_client
 def StreamRedisClient() -> redis.Redis:
     """Redis Streams 전용 클라이언트(raw)를 생성합니다.
 

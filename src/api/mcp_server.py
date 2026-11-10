@@ -35,12 +35,12 @@ from src.api.agent_tool import (
 from src.api.middleware import MCPAuthMiddleware
 from src.api.blocking import mcp_work_pool
 from src.core.database.factory import DatabaseManager
-from src.core.database.migrations import run_database_migrations
+from src.core.database.schema import ensure_database_schema
 from src.settings.web import SettingsPathDispatcher, settings_app
 
 database_manager = DatabaseManager()
 try:
-    run_database_migrations(database_manager)
+    ensure_database_schema(database_manager)
 finally:
     database_manager.close()
 

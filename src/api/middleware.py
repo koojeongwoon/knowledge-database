@@ -175,22 +175,12 @@ def _request_user_config(headers: dict, user_id: str) -> dict:
 
 
 def _authenticated_config(token: str, headers: dict) -> dict:
-    """JWT/JWKS, local identity and storage lookups are synchronous I/O."""
+    """JWT/JWKS and local identity lookups are synchronous I/O."""
     claims = verify_gateway_delegation_token(token)
     user_id = ApiKeyService().get_or_create_user(VerifiedUserIdentity.from_claims(claims))
-    config = _request_user_config(headers, user_id)
-    try:
-        from src.settings.service import UserSettingsService
-        service = UserSettingsService()
-        try:
-            stored = service.get_storage_runtime_config(user_id)
-            if stored:
-                config.update(stored)
-        finally:
-            service.db_manager.close()
-    except Exception as exc:
-        logger.warning("Failed to load stored user settings for %s: %s", user_id, exc)
-    return config
+    # Tool decorators read current settings when the tool actually executes.
+    # Loading them here duplicates that read and is unnecessary for MCP setup.
+    return _request_user_config(headers, user_id)
 
 class MCPAuthMiddleware:
     """

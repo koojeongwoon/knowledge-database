@@ -24,6 +24,7 @@ class AuditOutbox:
             os.close(fd)
             conn = sqlite3.connect(self.path, timeout=1, check_same_thread=False)
             try:
+                conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=FULL")
                 conn.execute("PRAGMA cache_size=-1024")
                 conn.execute("""

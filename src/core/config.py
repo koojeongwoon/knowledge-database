@@ -17,10 +17,10 @@ class Settings(BaseSettings):
     db_min_connections: int = Field(default=1, ge=0, validation_alias="DB_MIN_CONNECTIONS")
     db_max_connections: int = Field(default=3, ge=1, validation_alias="DB_MAX_CONNECTIONS")
     db_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="DB_POOL_TIMEOUT_SECONDS")
-    db_pool_max_waiting: int = Field(default=8, ge=1, validation_alias="DB_POOL_MAX_WAITING")
+    db_pool_max_waiting: int = Field(default=32, ge=1, validation_alias="DB_POOL_MAX_WAITING")
     db_connect_timeout_seconds: int = Field(default=3, ge=1, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
 
-    mcp_thread_pool_size: int = Field(default=8, ge=1, validation_alias="MCP_THREAD_POOL_SIZE")
+    mcp_thread_pool_size: int = Field(default=24, ge=1, validation_alias="MCP_THREAD_POOL_SIZE")
     mcp_thread_pool_max_waiting: int = Field(default=16, ge=0, validation_alias="MCP_THREAD_POOL_MAX_WAITING")
     mcp_thread_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="MCP_THREAD_POOL_TIMEOUT_SECONDS")
 

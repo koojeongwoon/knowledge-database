@@ -24,6 +24,7 @@ class PostgresAuditHandler(logging.Handler):
     def __init__(self, connect=None):
         super().__init__()
         self._connect = connect or psycopg.connect
+        self._connection = None
 
     def emit(self, record):
         msg = record.getMessage()
@@ -36,16 +37,32 @@ class PostgresAuditHandler(logging.Handler):
         }
         # This worker owns its connection and timeout budget, independent of the
         # application's shared pool. Failure propagates to durable retry.
-        with self._connect(
-            DATABASE_URL, connect_timeout=2,
-            options="-c statement_timeout=3000 -c lock_timeout=1000",
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO knowledge_audit_logs (user_id, action, status, payload)
-                    VALUES (%s, %s, %s, %s)
-                """, (data["user_id"], data["action"], data["status"],
-                      json.dumps(payload, ensure_ascii=False)))
+        with self.lock:
+            try:
+                if self._connection is None or self._connection.closed:
+                    self._connection = self._connect(
+                        DATABASE_URL, connect_timeout=2, autocommit=True,
+                        options="-c statement_timeout=3000 -c lock_timeout=1000",
+                    )
+                with self._connection.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO knowledge_audit_logs (user_id, action, status, payload)
+                        VALUES (%s, %s, %s, %s)
+                    """, (data["user_id"], data["action"], data["status"],
+                          json.dumps(payload, ensure_ascii=False)))
+            except Exception:
+                self._disconnect()
+                raise
+
+    def _disconnect(self):
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    def close(self):
+        with self.lock:
+            self._disconnect()
+        super().close()
 
 
 class AuditDiagnostics:
@@ -162,6 +179,7 @@ def _shutdown():
     if not listener.stop():
         diagnostics.report("file_shutdown_pending")
     if worker.stop():
+        db_handler.close()
         outbox.close()
     else:
         # Claimed records remain on disk and become eligible when their lease expires.

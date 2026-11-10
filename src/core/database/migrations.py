@@ -1103,6 +1103,23 @@ def _add_iam_user_service_access_inbox(cur) -> None:
     """)
 
 
+def _index_graph_lookup(cur) -> None:
+    cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_documents_graph_title_idx
+        ON knowledge_documents (LOWER(title)) WHERE chunk_index = 0;
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_documents_graph_path_idx
+        ON knowledge_documents USING gin (LOWER(file_path) gin_trgm_ops)
+        WHERE chunk_index = 0;
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS knowledge_edges_source_path_idx
+        ON knowledge_edges (source_path);
+    """)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_core_schema", _create_core_schema),
     Migration(2, "upgrade_legacy_multitenancy", _upgrade_legacy_multitenancy),
@@ -1133,6 +1150,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(27, "add_user_lifecycle_identity", _add_user_lifecycle_identity),
     Migration(28, "add_iam_user_lifecycle_inbox", _add_iam_user_lifecycle_inbox),
     Migration(29, "add_iam_user_service_access_inbox", _add_iam_user_service_access_inbox),
+    Migration(30, "index_graph_lookup", _index_graph_lookup),
 )
 
 

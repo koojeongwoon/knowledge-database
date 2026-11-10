@@ -4,7 +4,9 @@ import logging
 import queue
 import time
 from threading import Event
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 from src.core.logging import audit
 from src.core.logging.outbox import AuditDeliveryWorker, AuditOutbox
@@ -38,6 +40,31 @@ def test_outbox_capacity_and_usage_survive_restart(tmp_path):
         assert resumed.put("new", "x" * 70)
     finally:
         resumed.close()
+
+
+def test_wal_outbox_recovers_record_after_process_exit_without_close(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = """
+import os,sys
+from pathlib import Path
+from src.core.logging.outbox import AuditOutbox
+outbox=AuditOutbox(Path(sys.argv[1]), 1000, 4)
+assert outbox.put('crash-record', 'durable-record')
+assert outbox._connection().execute('PRAGMA synchronous').fetchone()[0] == 2
+os._exit(0)
+"""
+    path = tmp_path / "crash.sqlite3"
+    subprocess.run([sys.executable, "-c", script, str(path)], check=True,
+                   cwd=Path(__file__).resolve().parents[1], timeout=10)
+    outbox = AuditOutbox(path, 1000, 4)
+    try:
+        assert outbox.claim("recovery")[:2] == ("crash-record", "durable-record")
+        outbox.acknowledge("crash-record", "recovery")
+        assert outbox.usage() == (0, 0)
+    finally:
+        outbox.close()
 
 
 def test_shared_outbox_claims_once_and_recovers_expired_lease(tmp_path):
@@ -242,10 +269,31 @@ def test_postgres_delivery_preserves_event_id_and_uses_timeouts():
         audit.PostgresAuditHandler().emit(record("a"))
     assert connect.call_args.kwargs["connect_timeout"] == 2
     assert "statement_timeout=3000" in connect.call_args.kwargs["options"]
-    cur = connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    assert connect.call_args.kwargs["autocommit"] is True
+    cur = connect.return_value.cursor.return_value.__enter__.return_value
     params = cur.execute.call_args.args[1]
     assert params[:3] == ("USER_1", "TEST", "SUCCESS")
     assert json.loads(params[3])["_audit_delivery"]["event_id"] == "a"
+
+
+def test_audit_delivery_reuses_connection_and_reconnects_after_failure():
+    first, second = MagicMock(closed=False), MagicMock(closed=False)
+    first_cursor = first.cursor.return_value.__enter__.return_value
+    first_cursor.execute.side_effect = [None, RuntimeError("broken connection")]
+    connect = Mock(side_effect=[first, second])
+    handler = audit.PostgresAuditHandler(connect=connect)
+    try:
+        handler.emit(record("one"))
+        with pytest.raises(RuntimeError, match="broken connection"):
+            handler.emit(record("two"))
+        first.close.assert_called_once()
+        handler.emit(record("two"))
+        handler.emit(record("three"))
+        assert connect.call_count == 2
+        assert second.cursor.return_value.__enter__.return_value.execute.call_count == 2
+    finally:
+        handler.close()
+    second.close.assert_called_once()
 
 
 def test_file_error_is_reported_without_dumping_record(tmp_path):
