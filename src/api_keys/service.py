@@ -15,7 +15,14 @@ def hash_api_key(plain_key: str) -> str:
 class ApiKeyService:
     def __init__(self, db_manager=None, cache_manager=None):
         self.db_manager = db_manager or DatabaseManager()
-        self.cache_manager = cache_manager or WikiCacheManager()
+        self._cache_manager = cache_manager
+
+    @property
+    def cache_manager(self):
+        # Delegated MCP identity lookup does not use the API-key cache.
+        if self._cache_manager is None:
+            self._cache_manager = WikiCacheManager()
+        return self._cache_manager
 
     def create(self, identity: VerifiedUserIdentity, key_name: str, validity_days: int = 365) -> dict:
         user_id = self.get_or_create_user(identity)

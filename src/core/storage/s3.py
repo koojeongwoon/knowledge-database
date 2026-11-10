@@ -4,6 +4,8 @@ from typing import List, Optional
 
 import boto3
 from botocore.exceptions import ClientError
+from botocore.config import Config
+from src.core.config import settings
 
 from src.core.storage.base import BaseStorageManager
 
@@ -21,7 +23,11 @@ class S3StorageManager(BaseStorageManager):
             "s3",
             endpoint_url=self.endpoint_url,
             aws_access_key_id=self.access_key_id,
-            aws_secret_access_key=self.secret_access_key
+            aws_secret_access_key=self.secret_access_key,
+            config=Config(connect_timeout=settings.s3_connect_timeout_seconds,
+                          read_timeout=settings.s3_read_timeout_seconds,
+                          max_pool_connections=settings.s3_max_connections,
+                          retries={"mode": "standard", "max_attempts": 3}),
         )
 
     def _normalize_key(self, path: str) -> str:

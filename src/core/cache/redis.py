@@ -4,6 +4,7 @@ from typing import Optional
 import redis
 
 from src.core.cache.base import BaseCacheManager
+from src.core.config import settings
 
 logger = logging.getLogger("cache_manager")
 
@@ -25,8 +26,8 @@ class RedisCacheManager(BaseCacheManager):
         host: str,
         port: int,
         password: Optional[str] = None,
-        socket_timeout: float = 1.0,
-        socket_connect_timeout: float = 2.0,
+        socket_timeout: Optional[float] = None,
+        socket_connect_timeout: Optional[float] = None,
         socket_keepalive: bool = True,
     ):
         self.client = redis.Redis(
@@ -35,8 +36,9 @@ class RedisCacheManager(BaseCacheManager):
             password=password or None,
             db=0,
             decode_responses=True,
-            socket_timeout=socket_timeout,
-            socket_connect_timeout=socket_connect_timeout,
+            socket_timeout=socket_timeout if socket_timeout is not None else settings.redis_cache_timeout_seconds,
+            socket_connect_timeout=socket_connect_timeout if socket_connect_timeout is not None else settings.redis_connect_timeout_seconds,
+            max_connections=settings.redis_max_connections,
             socket_keepalive=socket_keepalive,
         )
 

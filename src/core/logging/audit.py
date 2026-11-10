@@ -24,6 +24,7 @@ class PostgresAuditHandler(logging.Handler):
     def __init__(self, connect=None):
         super().__init__()
         self._connect = connect or psycopg.connect
+        self._connection = None
 
     def emit(self, record):
         msg = record.getMessage()
@@ -36,16 +37,54 @@ class PostgresAuditHandler(logging.Handler):
         }
         # This worker owns its connection and timeout budget, independent of the
         # application's shared pool. Failure propagates to durable retry.
-        with self._connect(
-            DATABASE_URL, connect_timeout=2,
-            options="-c statement_timeout=3000 -c lock_timeout=1000",
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO knowledge_audit_logs (user_id, action, status, payload)
-                    VALUES (%s, %s, %s, %s)
-                """, (data["user_id"], data["action"], data["status"],
-                      json.dumps(payload, ensure_ascii=False)))
+        self._write("""
+            INSERT INTO knowledge_audit_logs (user_id, action, status, payload)
+            VALUES (%s, %s, %s, %s)
+        """, (data["user_id"], data["action"], data["status"], json.dumps(payload, ensure_ascii=False)))
+
+    def emit_batch(self, records):
+        rows = []
+        for record in records:
+            message = record.getMessage()
+            if not message.startswith("[AUDIT] "):
+                continue
+            data = json.loads(message[len("[AUDIT] "):])
+            rows.append(dict(user_id=data["user_id"], action=data["action"], status=data["status"],
+                             payload={**data["payload"], "_audit_delivery": {
+                                 "event_id": data["event_id"], "recorded_at": data["timestamp"]}}))
+        if rows:
+            # One atomic INSERT/commit for the bounded batch; acknowledge the
+            # outbox only after execute has returned successfully.
+            self._write("""
+                INSERT INTO knowledge_audit_logs (user_id, action, status, payload)
+                SELECT user_id, action, status, payload
+                FROM jsonb_to_recordset(%s::jsonb)
+                     AS event(user_id text, action text, status text, payload jsonb)
+            """, (json.dumps(rows, ensure_ascii=False),))
+
+    def _write(self, query, parameters):
+        with self.lock:
+            try:
+                if self._connection is None or self._connection.closed:
+                    self._connection = self._connect(
+                        DATABASE_URL, connect_timeout=settings.audit_connect_timeout_seconds, autocommit=True,
+                        options=f"-c statement_timeout={settings.audit_statement_timeout_ms} -c lock_timeout={settings.audit_lock_timeout_ms}",
+                    )
+                with self._connection.cursor() as cur:
+                    cur.execute(query, parameters)
+            except Exception:
+                self._disconnect()
+                raise
+
+    def _disconnect(self):
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    def close(self):
+        with self.lock:
+            self._disconnect()
+        super().close()
 
 
 class AuditDiagnostics:
@@ -150,7 +189,12 @@ def _deliver(body):
     db_handler.emit(logging.makeLogRecord({"msg": "[AUDIT] " + body}))
 
 
-worker = AuditDeliveryWorker(outbox, _deliver, diagnostics.report)
+def _deliver_batch(bodies):
+    db_handler.emit_batch([logging.makeLogRecord({"msg": "[AUDIT] " + body}) for body in bodies])
+
+
+worker = AuditDeliveryWorker(outbox, _deliver, diagnostics.report, deliver_batch=_deliver_batch,
+                             batch_size=settings.audit_delivery_batch_size)
 queue_handler = BoundedAuditQueueHandler(log_queue, outbox, worker, (file_handler, stream_handler), diagnostics)
 logger.addHandler(queue_handler)
 listener = BoundedAuditQueueListener(log_queue, file_handler, stream_handler, respect_handler_level=True)
@@ -162,6 +206,7 @@ def _shutdown():
     if not listener.stop():
         diagnostics.report("file_shutdown_pending")
     if worker.stop():
+        db_handler.close()
         outbox.close()
     else:
         # Claimed records remain on disk and become eligible when their lease expires.

@@ -35,9 +35,9 @@ class UserSettingsService:
             raise SettingsEncryptionError("저장된 설정을 복호화할 수 없습니다.") from exc
 
     def initialize(self) -> None:
-        from src.core.database.migrations import run_database_migrations
+        from src.core.database.schema import ensure_database_schema
 
-        run_database_migrations(self.db_manager)
+        ensure_database_schema(self.db_manager)
 
     def _get_row(self, owner_id: str):
         self.initialize()

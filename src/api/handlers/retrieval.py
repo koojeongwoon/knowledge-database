@@ -25,7 +25,8 @@ class RetrievalApiHandler:
             query = guard_result.sanitized_text
         try:
             database = self.database_factory()
-            database.connect()
+            # Repositories acquire/release a lease for each cursor. Do not hold
+            # one while the searcher waits for an external embedding response.
         except Exception as exc:
             self.audit("KNOWLEDGE_RETRIEVAL", "FAILED", user_id=user_id,
                        payload={"query": query, "error": f"DB 연결 실패: {exc}"})

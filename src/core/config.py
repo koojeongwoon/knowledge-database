@@ -14,8 +14,36 @@ class Settings(BaseSettings):
     db_name: str = Field(default="knowledge_db", validation_alias="DB_NAME")
     db_user: str = Field(default="postgres", validation_alias="DB_USER")
     db_password: str = Field(default="postgres", validation_alias="DB_PASSWORD")
-    db_min_connections: int = Field(default=2, validation_alias="DB_MIN_CONNECTIONS")
-    db_max_connections: int = Field(default=20, validation_alias="DB_MAX_CONNECTIONS")
+    db_min_connections: int = Field(default=1, ge=0, validation_alias="DB_MIN_CONNECTIONS")
+    db_max_connections: int = Field(default=3, ge=1, validation_alias="DB_MAX_CONNECTIONS")
+    db_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="DB_POOL_TIMEOUT_SECONDS")
+    db_pool_max_waiting: int = Field(default=32, ge=1, validation_alias="DB_POOL_MAX_WAITING")
+    db_connect_timeout_seconds: int = Field(default=3, ge=1, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
+
+    mcp_thread_pool_size: int = Field(default=24, ge=1, validation_alias="MCP_THREAD_POOL_SIZE")
+    mcp_thread_pool_max_waiting: int = Field(default=128, ge=0, validation_alias="MCP_THREAD_POOL_MAX_WAITING")
+    mcp_thread_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="MCP_THREAD_POOL_TIMEOUT_SECONDS")
+
+    http_max_connections: int = Field(default=24, ge=1, validation_alias="HTTP_MAX_CONNECTIONS")
+    http_connect_timeout_seconds: float = Field(default=3, gt=0, validation_alias="HTTP_CONNECT_TIMEOUT_SECONDS")
+    http_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="HTTP_POOL_TIMEOUT_SECONDS")
+    http_keepalive_seconds: float = Field(default=30, gt=0, validation_alias="HTTP_KEEPALIVE_SECONDS")
+    broker_http_timeout_seconds: float = Field(default=125, gt=0, validation_alias="BROKER_HTTP_TIMEOUT_SECONDS")
+    broker_control_timeout_seconds: float = Field(default=35, gt=0, validation_alias="BROKER_CONTROL_TIMEOUT_SECONDS")
+    auth_http_timeout_seconds: float = Field(default=10, gt=0, validation_alias="AUTH_HTTP_TIMEOUT_SECONDS")
+    s3_connect_timeout_seconds: float = Field(default=3, gt=0, validation_alias="S3_CONNECT_TIMEOUT_SECONDS")
+    s3_read_timeout_seconds: float = Field(default=30, gt=0, validation_alias="S3_READ_TIMEOUT_SECONDS")
+    s3_max_connections: int = Field(default=24, ge=1, validation_alias="S3_MAX_CONNECTIONS")
+    redis_connect_timeout_seconds: float = Field(default=2, gt=0, validation_alias="REDIS_CONNECT_TIMEOUT_SECONDS")
+    redis_cache_timeout_seconds: float = Field(default=1, gt=0, validation_alias="REDIS_CACHE_TIMEOUT_SECONDS")
+    redis_stream_timeout_seconds: float = Field(default=10, gt=0, validation_alias="REDIS_STREAM_TIMEOUT_SECONDS")
+    redis_max_connections: int = Field(default=32, ge=1, validation_alias="REDIS_MAX_CONNECTIONS")
+    storage_client_cache_size: int = Field(default=32, ge=1, validation_alias="STORAGE_CLIENT_CACHE_SIZE")
+    jwks_http_timeout_seconds: float = Field(default=10, gt=0, validation_alias="JWKS_HTTP_TIMEOUT_SECONDS")
+    audit_connect_timeout_seconds: int = Field(default=2, ge=1, validation_alias="AUDIT_CONNECT_TIMEOUT_SECONDS")
+    audit_statement_timeout_ms: int = Field(default=3000, ge=1, validation_alias="AUDIT_STATEMENT_TIMEOUT_MS")
+    audit_lock_timeout_ms: int = Field(default=1000, ge=1, validation_alias="AUDIT_LOCK_TIMEOUT_MS")
+    audit_delivery_batch_size: int = Field(default=20, ge=1, le=100, validation_alias="AUDIT_DELIVERY_BATCH_SIZE")
 
     audit_queue_size: int = Field(default=512, ge=1, validation_alias="AUDIT_QUEUE_SIZE")
     audit_record_max_bytes: int = Field(default=16384, ge=1024, validation_alias="AUDIT_RECORD_MAX_BYTES")
@@ -81,6 +109,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def validate_database_pool(self) -> 'Settings':
+        if self.db_min_connections > self.db_max_connections:
+            raise ValueError("DB_MIN_CONNECTIONS must not exceed DB_MAX_CONNECTIONS")
+        return self
 
     @model_validator(mode="after")
     def set_embedding_dimension(self) -> 'Settings':

@@ -2,6 +2,7 @@ import json
 import os
 import re
 from typing import Dict, List, Any
+from pgvector import Vector
 
 from src.retrieval.domain.repository import BaseRetrievalRepository
 
@@ -40,18 +41,28 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         with self.db_manager.cursor() as cur:
             # BM25 전문 검색 (pg_search) 시도 후 미지원 시 기존 tsvector 폴백
             sql_bm25 = """
+            WITH lexical AS MATERIALIZED (
+                SELECT id, paradedb.score(id) AS rank
+                FROM knowledge_documents
+                WHERE id @@@ paradedb.parse(%s)
+            ), matches AS MATERIALIZED (
+                SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
+                       d.content, d.parent_content, d.raw_frontmatter, d.owner_id,
+                       lexical.rank
+                FROM knowledge_documents d
+                JOIN lexical ON lexical.id = d.id
+                WHERE d.file_path NOT LIKE 'baselines/%%'
+                      AND d.file_path NOT LIKE 'baseline-drafts/%%'
+                      AND ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
+                ORDER BY rank DESC
+                LIMIT %s
+            )
             SELECT d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags,
                    d.content, d.parent_content, d.raw_frontmatter,
-                   COALESCE(c.citation_count, 0) AS citation_count,
-                   paradedb.score(d.id) AS rank
-            FROM knowledge_documents d
+                   COALESCE(c.citation_count, 0) AS citation_count, d.rank
+            FROM matches d
             LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
-            WHERE d.id @@@ paradedb.parse(%s)
-                  AND d.file_path NOT LIKE 'baselines/%%'
-                  AND d.file_path NOT LIKE 'baseline-drafts/%%'
-                  AND ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
-            ORDER BY rank DESC
-            LIMIT %s;
+            ORDER BY d.rank DESC;
             """
             try:
                 cur.execute(sql_bm25, (search_query, owner_id, limit))
@@ -87,23 +98,23 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
 
     def similarity_search(self, query_embedding: List[float], limit: int = 5) -> List[Dict[str, Any]]:
         owner_id = self._get_owner_id()
-        embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
+        embedding = Vector(query_embedding)
         
         with self.db_manager.cursor() as cur:
             query = """
             SELECT 
                 d.file_path, d.chunk_index, d.doc_type, d.title, d.description, d.tags, d.content, d.parent_content, d.raw_frontmatter,
-                (1 - (d.embedding <=> %s)) AS similarity,
+                (1 - (d.embedding <=> %b)) AS similarity,
                 COALESCE(c.citation_count, 0) AS citation_count
             FROM knowledge_documents d
             LEFT JOIN knowledge_citations c ON d.file_path = c.file_path AND d.owner_id = c.owner_id
             WHERE ((d.visibility = 'public') OR (d.visibility = 'private' AND d.owner_id = %s))
               AND d.file_path NOT LIKE 'baselines/%%'
               AND d.file_path NOT LIKE 'baseline-drafts/%%'
-            ORDER BY d.embedding <=> %s ASC
+            ORDER BY d.embedding <=> %b ASC
             LIMIT %s;
             """
-            cur.execute(query, (embedding_str, owner_id, embedding_str, limit))
+            cur.execute(query, (embedding, owner_id, embedding, limit))
             columns = [col[0] for col in cur.description]
             results = []
             for row in cur.fetchall():
