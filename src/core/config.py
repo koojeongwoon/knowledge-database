@@ -14,8 +14,11 @@ class Settings(BaseSettings):
     db_name: str = Field(default="knowledge_db", validation_alias="DB_NAME")
     db_user: str = Field(default="postgres", validation_alias="DB_USER")
     db_password: str = Field(default="postgres", validation_alias="DB_PASSWORD")
-    db_min_connections: int = Field(default=2, validation_alias="DB_MIN_CONNECTIONS")
-    db_max_connections: int = Field(default=20, validation_alias="DB_MAX_CONNECTIONS")
+    db_min_connections: int = Field(default=1, ge=0, validation_alias="DB_MIN_CONNECTIONS")
+    db_max_connections: int = Field(default=3, ge=1, validation_alias="DB_MAX_CONNECTIONS")
+    db_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="DB_POOL_TIMEOUT_SECONDS")
+    db_pool_max_waiting: int = Field(default=8, ge=1, validation_alias="DB_POOL_MAX_WAITING")
+    db_connect_timeout_seconds: int = Field(default=3, ge=1, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
 
     audit_queue_size: int = Field(default=512, ge=1, validation_alias="AUDIT_QUEUE_SIZE")
     audit_record_max_bytes: int = Field(default=16384, ge=1024, validation_alias="AUDIT_RECORD_MAX_BYTES")
@@ -81,6 +84,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @model_validator(mode="after")
+    def validate_database_pool(self) -> 'Settings':
+        if self.db_min_connections > self.db_max_connections:
+            raise ValueError("DB_MIN_CONNECTIONS must not exceed DB_MAX_CONNECTIONS")
+        return self
 
     @model_validator(mode="after")
     def set_embedding_dimension(self) -> 'Settings':

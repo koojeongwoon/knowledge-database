@@ -1,19 +1,19 @@
-import psycopg
-import time
 import logging
 import uuid
+from threading import Lock
 from contextlib import contextmanager
 from typing import Generator, Any
-from psycopg_pool import ConnectionPool, PoolTimeout
+from psycopg_pool import ConnectionPool
 from pgvector.psycopg import register_vector
 
-from src.core.config import DATABASE_URL, DB_MIN_CONNECTIONS, DB_MAX_CONNECTIONS
+from src.core.config import DATABASE_URL, DB_MIN_CONNECTIONS, DB_MAX_CONNECTIONS, settings
 from src.core.database.base import BaseDatabaseManager
 
 logger = logging.getLogger("database_pool")
 
 # 글로벌 커넥션 풀 선언 (Lazy Initialization)
 _connection_pool = None
+_pool_lock = Lock()
 _VECTOR_REGISTERED_ATTR = "_knowledge_vector_registered"
 
 
@@ -31,15 +31,20 @@ def _configure_connection(conn) -> None:
 def get_connection_pool() -> ConnectionPool:
     global _connection_pool
     if _connection_pool is None:
-        logger.info(f"Initializing psycopg_pool.ConnectionPool (min={DB_MIN_CONNECTIONS}, max={DB_MAX_CONNECTIONS})")
-        _connection_pool = ConnectionPool(
-            conninfo=DATABASE_URL,
-            min_size=DB_MIN_CONNECTIONS,
-            max_size=DB_MAX_CONNECTIONS,
-            timeout=3.0,
-            configure=_configure_connection,
-            open=True
-        )
+        with _pool_lock:
+            if _connection_pool is None:
+                logger.info("Initializing database pool (min=%s, max=%s)", DB_MIN_CONNECTIONS, DB_MAX_CONNECTIONS)
+                _connection_pool = ConnectionPool(
+                    conninfo=DATABASE_URL,
+                    min_size=DB_MIN_CONNECTIONS,
+                    max_size=DB_MAX_CONNECTIONS,
+                    timeout=settings.db_pool_timeout_seconds,
+                    max_waiting=settings.db_pool_max_waiting,
+                    kwargs={"connect_timeout": settings.db_connect_timeout_seconds},
+                    check=ConnectionPool.check_connection,
+                    configure=_configure_connection,
+                    open=True,
+                )
     return _connection_pool
 
 
@@ -48,54 +53,35 @@ class PostgresDatabaseManager(BaseDatabaseManager):
         self.conn = None
         self._from_pool = False
 
-    def _is_connection_alive(self, conn) -> bool:
-        """
-        [Connection Test Query (SELECT 1) 구현]
-        커넥션이 물리적으로 연결이 끊겼거나 방화벽에 의해 죽었는지 검증합니다.
-        """
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-            return True
-        except Exception:
-            return False
-
     def connect(self):
         if not self.conn or self.conn.closed:
+            self.close()
             try:
-                pool = get_connection_pool()
-                # 1. 커넥션 풀에서 커넥션 획득 (내장 대기 시간 3초 활용)
-                self.conn = pool.getconn()
+                self.conn = get_connection_pool().getconn()
                 self._from_pool = True
-                
-                # 2. 대여받은 커넥션 생존 검증 (Test-On-Borrow)
-                if not self._is_connection_alive(self.conn):
-                    logger.warning("Borrowed connection was dead. Evicting and creating a new one.")
-                    pool.putconn(self.conn)
-                    self.conn = pool.getconn()
-                
-                # 물리 커넥션당 최초 1회만 pgvector 데이터 타입 등록
                 _configure_connection(self.conn)
             except Exception as e:
-                logger.error(f"Failed to lease connection from pool ({e}). Falling back to direct connection.")
-                # 풀 에러 발생 시 최후의 보루로 다이렉트 단일 연결로 폴백
-                self.conn = psycopg.connect(DATABASE_URL)
-                self._from_pool = False
-                _configure_connection(self.conn)
+                from src.api.exceptions import DatabaseException
+                if self.conn is not None:
+                    self.conn.close()
+                    self.close()
+                logger.warning("Database connection unavailable (%s)", type(e).__name__)
+                raise DatabaseException("Database connection unavailable") from e
 
     def close(self):
-        if self.conn and not self.conn.closed:
-            if self._from_pool:
-                try:
-                    pool = get_connection_pool()
-                    # 풀에 다시 커넥션 반납
-                    pool.putconn(self.conn)
-                except Exception as e:
-                    logger.error(f"Failed to return connection to pool ({e}). Closing physically.")
+        if self.conn is not None:
+            try:
+                if self._from_pool:
+                    # Closed connections must also be returned to release their slot.
+                    get_connection_pool().putconn(self.conn)
+                else:
                     self.conn.close()
-            else:
+            except Exception:
+                logger.warning("Failed to return database connection; closing it")
                 self.conn.close()
-            self.conn = None
+            finally:
+                self.conn = None
+                self._from_pool = False
 
     @contextmanager
     def cursor(self) -> Generator[Any, None, None]:
