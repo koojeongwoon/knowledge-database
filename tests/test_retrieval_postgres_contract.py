@@ -18,6 +18,7 @@ from src.retrieval.infrastructure.retrieval_repository import PostgresRetrievalR
 class RetrievalPostgresContract(unittest.TestCase):
     def test_identity_read_stays_fresh_without_rewriting_the_user(self):
         from src.api_keys.auth import AUTH_TOKEN_ISSUER, KNOWLEDGE_TENANT_ID
+        from src.api.exceptions import DatabaseException
         from src.users.service import LocalUserService, VerifiedUserIdentity
         self.assertTrue(settings.db_host.startswith('codex-db-load-'))
         self.assertEqual(settings.db_name,'knowledge_bench')
@@ -38,8 +39,9 @@ class RetrievalPostgresContract(unittest.TestCase):
                 cur.execute("""INSERT INTO iam_user_lifecycle_states
                     (tenant_id,subject_id,lifecycle_status,user_version,last_event_id)
                     VALUES (%s,%s,'BLOCKED',2,%s)""",(KNOWLEDGE_TENANT_ID,subject,subject))
-            with self.assertRaises((ValueError,RuntimeError)):
+            with self.assertRaises(DatabaseException) as blocked:
                 users.ensure_local_user(identity)
+            self.assertIsInstance(blocked.exception.__cause__, ValueError)
         finally:
             with database.cursor() as cur:
                 cur.execute('DELETE FROM iam_user_lifecycle_states WHERE tenant_id=%s AND subject_id=%s',(KNOWLEDGE_TENANT_ID,subject))
