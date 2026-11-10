@@ -1008,6 +1008,17 @@ Alembic이나 SQLAlchemy migration 대신 `src/core/database/migrations.py`의 �
 
 ## 검증
 
+MCP의 live 검색과 기준본 검색, 요청 인증의 동기 I/O는 이벤트 루프 밖에서
+실행합니다. 이 작업들은 프로세스당 하나의 제한된 풀을 공유합니다.
+`MCP_THREAD_POOL_SIZE`(기본 8)는 동시 실행 작업 수,
+`MCP_THREAD_POOL_MAX_WAITING`(기본 16)은 추가 대기 작업 수,
+`MCP_THREAD_POOL_TIMEOUT_SECONDS`(기본 3)는 실행 전 대기 제한입니다.
+DB 풀은 별도로 최대 3개이며 작업 스레드 수만큼 연결을 늘리지 않습니다.
+검색은 외부 임베딩을 기다리는 동안 DB 연결을 선점하지 않습니다.
+사용자 ContextVar는 작업 스레드로 전달하고, 실행 중인 작업은 취소 요청 후에도
+실제 작업이 끝날 때까지 슬롯을 유지합니다. 포화·대기 만료 시 인증은 HTTP 503,
+검색은 MCP 도구 오류로 재시도를 안내합니다. 다른 동기 MCP 도구는 이 풀의 대상이 아닙니다.
+
 주요 호환성 gate:
 
 ```bash

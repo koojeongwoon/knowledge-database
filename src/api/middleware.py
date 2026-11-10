@@ -10,6 +10,7 @@ import jwt
 
 from src.core.cache.factory import WikiCacheManager
 from src.core.config import current_user_config
+from src.api.blocking import MCPBusyError, mcp_work_pool
 from src.core.logging.audit import log_audit
 from src.api_keys.auth import (
     KNOWLEDGE_CLIENT_ID,
@@ -171,6 +172,25 @@ def _request_user_config(headers: dict, user_id: str) -> dict:
     """Keep only the verified local owner; never retain the delegation token."""
     return {"user_id": user_id}
 
+
+def _authenticated_config(token: str, headers: dict) -> dict:
+    """JWT/JWKS, local identity and storage lookups are synchronous I/O."""
+    claims = verify_gateway_delegation_token(token)
+    user_id = ApiKeyService().get_or_create_user(VerifiedUserIdentity.from_claims(claims))
+    config = _request_user_config(headers, user_id)
+    try:
+        from src.settings.service import UserSettingsService
+        service = UserSettingsService()
+        try:
+            stored = service.get_storage_runtime_config(user_id)
+            if stored:
+                config.update(stored)
+        finally:
+            service.db_manager.close()
+    except Exception as exc:
+        logger.warning("Failed to load stored user settings for %s: %s", user_id, exc)
+    return config
+
 class MCPAuthMiddleware:
     """
     HTTP/SSE 프로토콜을 통과하기 전에 요청을 사전 가로채는 ASGI 미들웨어.
@@ -196,7 +216,7 @@ class MCPAuthMiddleware:
         method = scope.get("method", "GET").upper()
 
         # ─── 인증 검증 (POST /mcp 실제 요청에 대해서만 수행) ───
-        validated_user_id = "SYSTEM"
+        user_config = _request_user_config(headers, "SYSTEM")
         if path == "/mcp" and method == "POST":
             auth_header = headers.get("authorization", "")
             if not auth_header.startswith("Bearer "):
@@ -205,10 +225,10 @@ class MCPAuthMiddleware:
 
             token = auth_header.split(" ", 1)[1]
             try:
-                claims = verify_gateway_delegation_token(token)
-                validated_user_id = ApiKeyService().get_or_create_user(
-                    VerifiedUserIdentity.from_claims(claims)
-                )
+                user_config = await mcp_work_pool.run(_authenticated_config, token, headers)
+            except MCPBusyError as exc:
+                await _send_json_error(send, 503, str(exc))
+                return
             except (jwt.PyJWTError, KeyError, ValueError):
                 await _send_json_error(send, 401, "Unauthorized delegation token")
                 return
@@ -219,22 +239,6 @@ class MCPAuthMiddleware:
             scope["scheme"] = "https"
 
         # ─── 사용자 설정 ContextVar 주입 ───
-        user_config = _request_user_config(headers, validated_user_id)
-
-        # 프론트에서 저장한 설정을 우선 사용하고 미등록 사용자는 기존 헤더 설정을 유지합니다.
-        if validated_user_id != "SYSTEM":
-            try:
-                from src.settings.service import UserSettingsService
-                settings_service = UserSettingsService()
-                try:
-                    stored_config = settings_service.get_storage_runtime_config(validated_user_id)
-                    if stored_config:
-                        user_config.update(stored_config)
-                finally:
-                    settings_service.db_manager.close()
-            except Exception as e:
-                logger.warning(f"Failed to load stored user settings for {validated_user_id}: {e}")
-        
         token_val = current_user_config.set(user_config)
         try:
             await self.app(scope, receive, send)

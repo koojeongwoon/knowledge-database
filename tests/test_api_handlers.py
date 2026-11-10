@@ -30,6 +30,29 @@ def test_retrieval_handler_preserves_search_event_and_closes_database() -> None:
     database.close.assert_called_once_with()
 
 
+def test_search_does_not_reserve_database_during_embedding_io() -> None:
+    from src.core.database.connection import PostgresDatabaseManager
+    from src.retrieval.application.service import WikiSearcher
+    from src.retrieval.domain.policy import RetrievalPolicy
+
+    database = PostgresDatabaseManager()
+    database.connect = Mock(side_effect=AssertionError("DB leased before embedding completed"))
+    repository = Mock()
+    repository.similarity_search.return_value = []
+    repository.keyword_search.return_value = []
+    embedding = Mock()
+    def embed(query):
+        assert database.conn is None
+        return [1.0, 0.0]
+    embedding.embed_text.side_effect = embed
+    searcher = WikiSearcher(repository, embedding, RetrievalPolicy())
+    feedback = Mock()
+    feedback.record_event.return_value = "event-1"
+    result = _retrieval_handler(database, searcher, feedback).search("query", 5, "owner", "owner")
+    assert "Search Event ID: event-1" in result
+    embedding.embed_text.assert_called_once()
+
+
 def test_retrieval_handler_keeps_direct_search_when_event_recording_fails() -> None:
     database, searcher, feedback = Mock(), Mock(), Mock()
     searcher.search.return_value = [{"file_path": "qa/result.md"}]

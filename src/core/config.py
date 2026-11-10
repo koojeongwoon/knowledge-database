@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     db_pool_max_waiting: int = Field(default=8, ge=1, validation_alias="DB_POOL_MAX_WAITING")
     db_connect_timeout_seconds: int = Field(default=3, ge=1, validation_alias="DB_CONNECT_TIMEOUT_SECONDS")
 
+    mcp_thread_pool_size: int = Field(default=8, ge=1, validation_alias="MCP_THREAD_POOL_SIZE")
+    mcp_thread_pool_max_waiting: int = Field(default=16, ge=0, validation_alias="MCP_THREAD_POOL_MAX_WAITING")
+    mcp_thread_pool_timeout_seconds: float = Field(default=3, gt=0, validation_alias="MCP_THREAD_POOL_TIMEOUT_SECONDS")
+
     audit_queue_size: int = Field(default=512, ge=1, validation_alias="AUDIT_QUEUE_SIZE")
     audit_record_max_bytes: int = Field(default=16384, ge=1024, validation_alias="AUDIT_RECORD_MAX_BYTES")
     audit_outbox_path: str = Field(default="logs/audit-outbox.sqlite3", validation_alias="AUDIT_OUTBOX_PATH")

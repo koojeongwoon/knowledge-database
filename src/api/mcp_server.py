@@ -33,6 +33,7 @@ from src.api.agent_tool import (
     search_wiki_knowledge_baseline,
 )
 from src.api.middleware import MCPAuthMiddleware
+from src.api.blocking import mcp_work_pool
 from src.core.database.factory import DatabaseManager
 from src.core.database.migrations import run_database_migrations
 from src.settings.web import SettingsPathDispatcher, settings_app
@@ -87,12 +88,12 @@ mcp = FastMCP(
 )
 
 @mcp.tool(name="search_wiki_knowledge")
-def search_wiki_knowledge(query: str, limit: int = 5) -> str:
+async def search_wiki_knowledge(query: str, limit: int = 5) -> str:
     """
     개인 지식베이스(옵시디언 위키)에서 자연어 검색을 수행하고 
     관련성이 높은 마크다운 지식 조각 및 인용 정보를 반환합니다.
     """
-    return retrieve_wiki_knowledge(query, limit)
+    return await mcp_work_pool.run(retrieve_wiki_knowledge, query, limit)
 
 
 @mcp.tool(name="prepare_knowledge_baseline")
@@ -117,9 +118,9 @@ def confirm_knowledge_baseline(draft_id: str) -> str:
 
 
 @mcp.tool(name="search_knowledge_baseline")
-def search_knowledge_baseline(query: str, release_id: str, limit: int = 5) -> str:
+async def search_knowledge_baseline(query: str, release_id: str, limit: int = 5) -> str:
     """지정한 확정 기준본만 검색하며 일반 지식으로 자동 fallback하지 않습니다."""
-    return search_wiki_knowledge_baseline(query, release_id, limit)
+    return await mcp_work_pool.run(search_wiki_knowledge_baseline, query, release_id, limit)
 
 
 @mcp.tool(name="create_inbox_markdown")
