@@ -167,4 +167,7 @@ class MetricsLifecycle:
         try:
             await self.app(scope, receive, send)
         finally:
+            from src.core.http import close_http_clients, close_async_http_clients
+            await close_async_http_clients()
+            close_http_clients()
             stop_internal_metrics(server)

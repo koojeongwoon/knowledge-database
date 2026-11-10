@@ -1,9 +1,10 @@
 from collections import OrderedDict
 import hashlib
 from threading import RLock
+from src.core.config import settings
 
 # Only cached references are bounded; callers may still own evicted managers.
-MAX_STORAGE_INSTANCES = 32
+MAX_STORAGE_INSTANCES = settings.storage_client_cache_size
 _storage_instances = OrderedDict()
 _storage_cache_lock = RLock()
 # Stable, bounded creation locks prevent duplicate clients for the same owner.

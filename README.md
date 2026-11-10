@@ -1011,7 +1011,7 @@ Alembic이나 SQLAlchemy migration 대신 `src/core/database/migrations.py`의 �
 MCP의 live 검색과 기준본 검색, 요청 인증의 동기 I/O는 이벤트 루프 밖에서
 실행합니다. 이 작업들은 프로세스당 하나의 제한된 풀을 공유합니다.
 `MCP_THREAD_POOL_SIZE`(기본 24)는 동시 실행 작업 수,
-`MCP_THREAD_POOL_MAX_WAITING`(기본 64)은 추가 대기 작업 수,
+`MCP_THREAD_POOL_MAX_WAITING`(기본 128)은 추가 대기 작업 수,
 `MCP_THREAD_POOL_TIMEOUT_SECONDS`(기본 3)는 실행 전 대기 제한입니다.
 DB 풀은 별도로 최대 3개이며 작업 스레드 수만큼 연결을 늘리지 않습니다.
 DB 연결 대기는 최대 32개로 제한합니다.
@@ -1031,6 +1031,16 @@ BM25 검색은 전문 검색 후보를 구한 뒤 공개 범위·소유권·기�
 감사 기록은 `synchronous=FULL`을 유지한 SQLite WAL에 먼저 보관하고,
 단일 전달 워커가 PostgreSQL 연결 한 개를 재사용합니다. 연결 오류는 기존 durable
 retry로 넘기고 다음 시도에 재연결합니다.
+전달은 최대 20건씩 한 번의 원자적 INSERT로 처리하며, 성공한 배치만 outbox에서
+제거합니다. 변경 없는 사용자 매핑은 현재 lifecycle·버전·health를 SQL로 확인한
+뒤 읽기만 수행하며, 신규 사용자나 변경된 claims만 기존 upsert 경로로 처리합니다.
+
+Broker/IAM HTTP 클라이언트는 `src/core/http.py`의 프로필별 공유 풀을 사용합니다.
+동기 클라이언트는 프로세스별, 비동기 클라이언트는 이벤트 루프별로 재사용하고
+종료 시 닫습니다. Authorization과 사용자 메타데이터는 요청마다 전달하며, 공유
+클라이언트는 응답 쿠키를 저장하지 않습니다. DB·Redis·HTTP·S3의 풀 제한과
+타임아웃은 `src/core/config.py`에서 관리합니다. 사용자별 S3 클라이언트는 기존
+소유자·설정 fingerprint 캐시를 유지합니다.
 
 주요 호환성 gate:
 

@@ -3,6 +3,7 @@ from functools import lru_cache
 
 import jwt
 from jwt import PyJWKClient
+from src.core.config import settings
 
 KNOWLEDGE_TENANT_ID = os.getenv("KNOWLEDGE_TENANT_ID", "ten_9664c024babc4110")
 AUTH_SERVER_URL = os.getenv(
@@ -106,7 +107,7 @@ def _jwk_client() -> PyJWKClient:
             "User-Agent": "llm-wiki-jwks/1.0",
             "Accept": "application/json",
         },
-        timeout=10,
+        timeout=settings.jwks_http_timeout_seconds,
     )
 
 

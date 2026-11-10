@@ -16,6 +16,36 @@ from src.retrieval.infrastructure.retrieval_repository import PostgresRetrievalR
 
 @unittest.skipUnless(os.getenv("KNOWLEDGE_RETRIEVAL_SQL_TEST") == "1", "disposable SQL fixture only")
 class RetrievalPostgresContract(unittest.TestCase):
+    def test_identity_read_stays_fresh_without_rewriting_the_user(self):
+        from src.api_keys.auth import AUTH_TOKEN_ISSUER, KNOWLEDGE_TENANT_ID
+        from src.users.service import LocalUserService, VerifiedUserIdentity
+        self.assertTrue(settings.db_host.startswith('codex-db-load-'))
+        self.assertEqual(settings.db_name,'knowledge_bench')
+        database = PostgresDatabaseManager()
+        subject = 'probe-'+uuid.uuid4().hex
+        identity = VerifiedUserIdentity(AUTH_TOKEN_ISSUER, KNOWLEDGE_TENANT_ID, subject, 'probe@synthetic.invalid')
+        users = LocalUserService(database)
+        try:
+            user_id = users.ensure_local_user(identity)
+            with database.cursor() as cur:
+                cur.execute('SELECT xmin::text FROM knowledge_users WHERE user_id=%s',(user_id,))
+                original = cur.fetchone()[0]
+            for _ in range(3):
+                self.assertEqual(users.ensure_local_user(identity),user_id)
+            with database.cursor() as cur:
+                cur.execute('SELECT xmin::text FROM knowledge_users WHERE user_id=%s',(user_id,))
+                self.assertEqual(cur.fetchone()[0],original)
+                cur.execute("""INSERT INTO iam_user_lifecycle_states
+                    (tenant_id,subject_id,lifecycle_status,user_version,last_event_id)
+                    VALUES (%s,%s,'BLOCKED',2,%s)""",(KNOWLEDGE_TENANT_ID,subject,subject))
+            with self.assertRaises((ValueError,RuntimeError)):
+                users.ensure_local_user(identity)
+        finally:
+            with database.cursor() as cur:
+                cur.execute('DELETE FROM iam_user_lifecycle_states WHERE tenant_id=%s AND subject_id=%s',(KNOWLEDGE_TENANT_ID,subject))
+                cur.execute('DELETE FROM knowledge_users WHERE sub_val=%s',(subject,))
+            database.close()
+
     def test_owner_filter_precedes_limit_and_baselines_stay_excluded(self):
         self.assertTrue(settings.db_host.startswith("codex-db-load-"))
         self.assertEqual(settings.db_name, "knowledge_bench")

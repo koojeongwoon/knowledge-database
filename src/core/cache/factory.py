@@ -18,6 +18,7 @@ from threading import Lock
 from src.core.cache.base import BaseCacheManager
 from src.core.cache.redis import RedisCacheManager
 from src.core.config import (
+    settings,
     REDIS_WIKI_HOST,
     REDIS_WIKI_PORT,
     REDIS_WIKI_PASSWORD,
@@ -90,8 +91,9 @@ def StreamRedisClient() -> redis.Redis:
         password=REDIS_STREAM_PASSWORD or None,
         db=0,
         decode_responses=True,
-        socket_timeout=10.0,          # Streams block 폴링 지연을 고려한 여유 타임아웃
-        socket_connect_timeout=2.0,
+        socket_timeout=settings.redis_stream_timeout_seconds,
+        socket_connect_timeout=settings.redis_connect_timeout_seconds,
+        max_connections=settings.redis_max_connections,
         socket_keepalive=True,
     )
 

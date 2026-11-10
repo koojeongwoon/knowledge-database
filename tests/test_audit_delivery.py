@@ -106,6 +106,54 @@ def test_failed_delivery_is_retried_after_backoff(tmp_path):
         outbox.close()
 
 
+def test_batch_delivery_failure_retains_every_record_until_retry(tmp_path):
+    outbox = AuditOutbox(tmp_path / 'batch.sqlite3', 10000, 10)
+    deliver = Mock(side_effect=[RuntimeError('unavailable'), None])
+    worker = AuditDeliveryWorker(outbox, Mock(), Mock(), deliver_batch=deliver, batch_size=3)
+    try:
+        for event_id in ('a','b','c'):
+            assert outbox.put(event_id, body(event_id))
+        with patch('src.core.logging.outbox.time.time', return_value=100):
+            assert worker.run_once()
+            assert outbox.usage()[0] == 3
+            assert not worker.run_once()
+        with patch('src.core.logging.outbox.time.time', return_value=102):
+            assert worker.run_once()
+        assert outbox.usage() == (0,0)
+        assert [json.loads(value)['event_id'] for value in deliver.call_args.args[0]] == ['a','b','c']
+    finally:
+        outbox.close()
+
+
+def test_batch_acknowledgement_cannot_delete_another_workers_lease(tmp_path):
+    outbox = AuditOutbox(tmp_path/'lease.sqlite3', 10000, 10)
+    try:
+        for event_id in ('a','b'):
+            outbox.put(event_id, body(event_id))
+        assert len(outbox.claim_batch('owner', 2)) == 2
+        outbox.acknowledge_batch(['a','b'], 'other')
+        assert outbox.usage()[0] == 2
+        outbox.acknowledge_batch(['a','b'], 'owner')
+        assert outbox.usage() == (0,0)
+    finally:
+        outbox.close()
+
+
+def test_postgres_audit_batch_is_one_atomic_insert_with_all_event_ids():
+    connection = MagicMock(closed=False)
+    handler = audit.PostgresAuditHandler(connect=Mock(return_value=connection))
+    try:
+        handler.emit_batch([record('a'), record('b')])
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.execute.assert_called_once()
+        sql, params = cursor.execute.call_args.args
+        assert 'jsonb_to_recordset' in sql
+        rows = json.loads(params[0])
+        assert [r['payload']['_audit_delivery']['event_id'] for r in rows] == ['a','b']
+    finally:
+        handler.close()
+
+
 def test_full_file_queue_writes_synchronously_without_dropping_record(tmp_path):
     outbox = AuditOutbox(tmp_path / "audit.sqlite3", 1000, 4)
     local = logging.FileHandler(tmp_path / "audit.log")

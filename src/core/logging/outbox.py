@@ -71,24 +71,35 @@ class AuditOutbox:
         return True
 
     def claim(self, owner: str, lease_seconds: float = 60):
+        rows = self.claim_batch(owner, 1, lease_seconds)
+        return rows[0] if rows else None
+
+    def claim_batch(self, owner: str, limit: int, lease_seconds: float = 60):
+        if not 1 <= limit <= 100:
+            raise ValueError("Audit claim batch must be between 1 and 100")
         now = time.time()
         with self._transaction() as conn:
-            row = conn.execute("""
+            rows = conn.execute("""
                 SELECT event_id, record, attempts FROM pending
-                WHERE ready_at <= ? AND lease_until <= ? ORDER BY rowid LIMIT 1
-            """, (now, now)).fetchone()
-            if row:
-                conn.execute("UPDATE pending SET lease_owner = ?, lease_until = ? WHERE event_id = ?",
-                             (owner, now + lease_seconds, row[0]))
-            return row
+                WHERE ready_at <= ? AND lease_until <= ? ORDER BY rowid LIMIT ?
+            """, (now, now, limit)).fetchall()
+            conn.executemany("UPDATE pending SET lease_owner = ?, lease_until = ? WHERE event_id = ?",
+                             [(owner, now + lease_seconds, row[0]) for row in rows])
+            return rows
 
     def acknowledge(self, event_id: str, owner: str):
+        self.acknowledge_batch([event_id], owner)
+
+    def acknowledge_batch(self, event_ids, owner: str):
+        if not event_ids:
+            return
         with self._transaction() as conn:
-            row = conn.execute("SELECT size FROM pending WHERE event_id = ? AND lease_owner = ?",
-                               (event_id, owner)).fetchone()
-            if row:
-                conn.execute("DELETE FROM pending WHERE event_id = ?", (event_id,))
-                conn.execute("UPDATE usage SET events = events - 1, bytes = bytes - ? WHERE id = 1", (row[0],))
+            placeholders = ','.join('?' for _ in event_ids)
+            rows = conn.execute(f"SELECT event_id,size FROM pending WHERE event_id IN ({placeholders}) AND lease_owner = ?",
+                               [*event_ids,owner]).fetchall()
+            if rows:
+                conn.executemany("DELETE FROM pending WHERE event_id = ?", [(r[0],) for r in rows])
+                conn.execute("UPDATE usage SET events = events - ?, bytes = bytes - ? WHERE id = 1", (len(rows),sum(r[1] for r in rows)))
 
     def retry(self, event_id: str, owner: str, attempts: int):
         delay = min(60, 2 ** min(attempts, 6))
@@ -111,10 +122,14 @@ class AuditOutbox:
 
 
 class AuditDeliveryWorker:
-    def __init__(self, outbox, deliver, report):
+    def __init__(self, outbox, deliver, report, *, deliver_batch=None, batch_size=20):
+        if not 1 <= batch_size <= 100:
+            raise ValueError("Audit delivery batch must be between 1 and 100")
         self.outbox = outbox
         self.deliver = deliver
         self.report = report
+        self.deliver_batch = deliver_batch
+        self.batch_size = batch_size
         self.owner = uuid.uuid4().hex
         self._stop = Event()
         self._wake = Event()
@@ -127,6 +142,19 @@ class AuditDeliveryWorker:
         self._wake.set()
 
     def run_once(self):
+        if self.deliver_batch is not None:
+            rows = self.outbox.claim_batch(self.owner, self.batch_size)
+            if not rows:
+                return False
+            try:
+                self.deliver_batch([row[1] for row in rows])
+            except Exception:
+                self.report("db_delivery_failed")
+                for event_id, record, attempts in rows:
+                    self.outbox.retry(event_id, self.owner, attempts)
+            else:
+                self.outbox.acknowledge_batch([row[0] for row in rows], self.owner)
+            return True
         row = self.outbox.claim(self.owner)
         if row is None:
             return False

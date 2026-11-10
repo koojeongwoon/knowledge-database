@@ -3,6 +3,7 @@ import json,os
 from datetime import datetime,timezone
 from pathlib import Path
 import httpx
+from src.core.http import http_client, broker_base_url, workload_token_path
 from src.settings.broker_identity import BrokerIdentityRepository
 from .broker_embedding import BrokerEmbeddingError
 
@@ -84,11 +85,11 @@ class BrokerStructuredChat:
         except (ValueError,TypeError,KeyError,AttributeError):raise BrokerEmbeddingError('Invalid LLM provider response') from None
 
     def linked(self):
-        base=os.getenv('CREDENTIAL_BROKER_URL','').rstrip('/')
+        base=broker_base_url()
         if not base:raise BrokerEmbeddingError('Broker URL is not configured')
         try:
-            token=Path(os.getenv('BROKER_WORKLOAD_TOKEN_FILE','/var/run/secrets/credential-broker/token')).read_text().strip()
-            with httpx.Client(timeout=35,follow_redirects=False,transport=self.transport) as client:
+            token=workload_token_path().read_text().strip()
+            with http_client('control',transport=self.transport) as client:
                 response=client.post(base+'/v1/workload/codex/status',headers={'Authorization':'Bearer '+token},
                     json={'subject':self.subject,'issued_at':datetime.now(timezone.utc).isoformat()})
             if response.status_code!=200:raise BrokerEmbeddingError('Broker connection status unavailable')

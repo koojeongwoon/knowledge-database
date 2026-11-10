@@ -10,6 +10,8 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
+from src.core.http import async_http_client
+from src.core.config import settings
 import jwt
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -67,7 +69,7 @@ class OAuthClient:
             "KNOWLEDGE_POST_LOGOUT_REDIRECT_URI",
             "https://knowledge.lynply.com/logged-out",
         )
-        self.timeout = float(os.getenv("AUTH_HTTP_TIMEOUT_SECONDS", "10"))
+        self.timeout = float(os.getenv("AUTH_HTTP_TIMEOUT_SECONDS", str(settings.auth_http_timeout_seconds)))
 
     def authorization_url(self, state: str, code_challenge: str) -> str:
         query = urlencode({
@@ -99,7 +101,7 @@ class OAuthClient:
         if not self.client_secret:
             raise OAuthSessionUnavailable("KNOWLEDGE_CLIENT_SECRET가 설정되지 않았습니다.")
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with async_http_client('iam', timeout=self.timeout) as client:
                 response = await client.post(
                     self.revocation_endpoint,
                     data={"token": token, "token_type_hint": token_type_hint},
@@ -121,7 +123,7 @@ class OAuthClient:
         if not self.client_secret:
             raise OAuthSessionUnavailable("KNOWLEDGE_CLIENT_SECRET가 설정되지 않았습니다.")
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with async_http_client('iam', timeout=self.timeout) as client:
                 response = await client.post(
                     self.token_endpoint,
                     data=data,

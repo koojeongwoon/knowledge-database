@@ -48,6 +48,29 @@ class LocalUserService:
     def ensure_local_user(self, identity: VerifiedUserIdentity) -> str:
         if identity.issuer != AUTH_TOKEN_ISSUER or identity.tenant_id != KNOWLEDGE_TENANT_ID:
             raise ValueError("Verified identity does not belong to Knowledge")
+        # A verified request normally maps an unchanged local identity. Keep the
+        # lifecycle/version/health checks in SQL, without rewriting the user row.
+        with self.db_manager.cursor() as cur:
+            cur.execute("""
+                SELECT u.user_id FROM knowledge_users u
+                WHERE u.sub_val = %s AND u.tenant_id = %s
+                  AND u.email IS NOT DISTINCT FROM %s
+                  AND (%s::text IS NULL OR u.name IS NOT DISTINCT FROM %s)
+                  AND u.user_version >= %s
+                  AND NOT EXISTS (
+                    SELECT 1 FROM iam_user_lifecycle_states state
+                    WHERE state.tenant_id = %s AND state.subject_id = %s
+                      AND (state.lifecycle_status <> 'ACTIVE' OR state.user_version > %s)
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM iam_user_lifecycle_health
+                    WHERE singleton AND last_seen_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds'
+                  )
+            """, (identity.subject_id, identity.tenant_id, identity.email, identity.name, identity.name,
+                  identity.user_version, identity.tenant_id, identity.subject_id, identity.user_version))
+            row = cur.fetchone()
+            if row:
+                return row[0]
         user_id = str(uuid.uuid4())
         with self.db_manager.transaction() as cur:
             cur.execute(
