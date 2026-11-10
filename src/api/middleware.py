@@ -11,6 +11,7 @@ import jwt
 from src.core.cache.factory import WikiCacheManager
 from src.core.config import current_user_config
 from src.api.blocking import MCPBusyError, mcp_work_pool
+from src.api.exceptions import DatabaseException
 from src.core.logging.audit import log_audit
 from src.api_keys.auth import (
     KNOWLEDGE_CLIENT_ID,
@@ -228,6 +229,9 @@ class MCPAuthMiddleware:
                 user_config = await mcp_work_pool.run(_authenticated_config, token, headers)
             except MCPBusyError as exc:
                 await _send_json_error(send, 503, str(exc))
+                return
+            except DatabaseException:
+                await _send_json_error(send, 503, "Knowledge database is busy; retry the request shortly.")
                 return
             except (jwt.PyJWTError, KeyError, ValueError):
                 await _send_json_error(send, 401, "Unauthorized delegation token")

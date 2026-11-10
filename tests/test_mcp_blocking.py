@@ -56,6 +56,31 @@ def test_sdk_search_keeps_event_loop_responsive_and_preserves_owner():
     asyncio.run(scenario())
 
 
+def test_database_exhaustion_during_authentication_is_retryable(monkeypatch):
+    from src.api import middleware
+    from src.api.exceptions import DatabaseException
+
+    async def scenario():
+        monkeypatch.setattr(middleware, "mcp_work_pool", BlockingWorkPool(1, 0, .1))
+        def unavailable(*args):
+            raise DatabaseException("internal connection details")
+        monkeypatch.setattr(middleware, "_authenticated_config", unavailable)
+        async def app(*args):
+            raise AssertionError("Unauthenticated request reached the application")
+        async def receive():
+            return {"type": "http.request", "body": b""}
+        messages = []
+        async def send(message):
+            messages.append(message)
+        await middleware.MCPAuthMiddleware(app)({
+            "type": "http", "method": "POST", "path": "/mcp",
+            "headers": [(b"authorization", b"Bearer fixture")],
+        }, receive, send)
+        assert messages[0]["status"] == 503
+        assert b"internal connection details" not in messages[1]["body"]
+    asyncio.run(scenario())
+
+
 def test_pool_bounds_running_and_waiting_work_and_recovers_after_timeout():
     async def scenario():
         pool = BlockingWorkPool(1, 1, .05)
