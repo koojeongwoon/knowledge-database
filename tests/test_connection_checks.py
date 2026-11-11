@@ -14,7 +14,8 @@ def setup_check(monkeypatch):
     monkeypatch.setattr(connection, "settings", SimpleNamespace(db_pool_check_interval_seconds=1.0))
     probe = Mock()
     monkeypatch.setattr(connection.ConnectionPool, "check_connection", probe)
-    conn = SimpleNamespace(closed=False, pgconn=SimpleNamespace(
+    monkeypatch.setattr(connection, "select", Mock(return_value=([], [], [])), raising=False)
+    conn = SimpleNamespace(closed=False, fileno=Mock(return_value=123),pgconn=SimpleNamespace(
         status=ConnStatus.OK, transaction_status=TransactionStatus.IDLE,
         consume_input=Mock(), is_busy=Mock(return_value=False),get_result=Mock(return_value=None)))
     return conn, clock, probe
@@ -38,6 +39,15 @@ def test_elapsed_interval_and_disabled_interval_retain_network_probes(monkeypatc
     monkeypatch.setattr(connection.settings, "db_pool_check_interval_seconds", 0)
     connection._check_connection(conn)
     assert probe.call_count == 3
+
+
+def test_readable_socket_forces_probe_even_during_recent_probe_window(monkeypatch):
+    conn, clock, probe = setup_check(monkeypatch)
+    connection._check_connection(conn)
+    connection.select.return_value = ([123], [], [])
+    clock[0] = 0.1
+    connection._check_connection(conn)
+    assert probe.call_count == 2
 
 
 def test_protocol_failure_is_not_hidden_by_recent_probe(monkeypatch):

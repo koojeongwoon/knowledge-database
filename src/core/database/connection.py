@@ -2,6 +2,7 @@ import logging
 import uuid
 from threading import Lock
 from time import monotonic
+from select import select
 from contextlib import contextmanager
 from typing import Generator, Any
 from psycopg_pool import ConnectionPool
@@ -26,6 +27,10 @@ def _check_connection(conn) -> None:
     if conn.closed:
         raise OperationalError("Database connection is closed")
     pgconn = conn.pgconn
+    # Readability can indicate an idle backend's FATAL reply/EOF. Never let the
+    # recent-probe window suppress a full check in that case: one consume_input()
+    # alone may only buffer the FATAL packet without observing the following EOF.
+    read_ready = bool(select([conn.fileno()], [], [], 0)[0])
     # libpq consumes available input without sending a query. Parse it before
     # reusing an idle connection so EOF, FATAL replies and pending results fail closed.
     pgconn.consume_input()
@@ -34,7 +39,7 @@ def _check_connection(conn) -> None:
             or pgconn.get_result() is not None):
         raise OperationalError("Database connection is not idle and healthy")
     last_probe = getattr(conn, _LAST_PROBE_ATTR, None)
-    if (last_probe is None
+    if (read_ready or last_probe is None
             or monotonic() - last_probe >= settings.db_pool_check_interval_seconds):
         ConnectionPool.check_connection(conn)
         setattr(conn, _LAST_PROBE_ATTR, monotonic())

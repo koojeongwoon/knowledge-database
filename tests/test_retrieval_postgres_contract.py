@@ -37,7 +37,7 @@ class RetrievalPostgresContract(unittest.TestCase):
                         self.assertEqual(borrowed.execute('SELECT 42').fetchone(), (42,))
                 self.assertEqual(probe.call_count, 1)
                 with psycopg.connect(connection.DATABASE_URL, autocommit=True) as control:
-                    self.assertTrue(control.execute('SELECT pg_terminate_backend(%s)', (pid,)).fetchone()[0])
+                    self.assertTrue(control.execute('SELECT pg_terminate_backend(%s,5000)', (pid,)).fetchone()[0])
                 self.assertTrue(select.select([borrowed.fileno()], [], [], 5)[0])
                 # Even within the recent-probe window, the pool replaces the dead
                 # backend before exposing a connection to the first real query.
