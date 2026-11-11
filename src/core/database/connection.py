@@ -1,9 +1,12 @@
 import logging
 import uuid
 from threading import Lock
+from time import monotonic
 from contextlib import contextmanager
 from typing import Generator, Any
 from psycopg_pool import ConnectionPool
+from psycopg import OperationalError
+from psycopg.pq import ConnStatus, TransactionStatus
 from pgvector.psycopg import register_vector
 
 from src.core.config import DATABASE_URL, DB_MIN_CONNECTIONS, DB_MAX_CONNECTIONS, settings
@@ -15,6 +18,26 @@ logger = logging.getLogger("database_pool")
 _connection_pool = None
 _pool_lock = Lock()
 _VECTOR_REGISTERED_ATTR = "_knowledge_vector_registered"
+_LAST_PROBE_ATTR = "_knowledge_last_network_probe"
+
+
+def _check_connection(conn) -> None:
+    """Check idle protocol state on every borrow; bound redundant network probes."""
+    if conn.closed:
+        raise OperationalError("Database connection is closed")
+    pgconn = conn.pgconn
+    # libpq consumes available input without sending a query. Parse it before
+    # reusing an idle connection so EOF, FATAL replies and pending results fail closed.
+    pgconn.consume_input()
+    if (pgconn.is_busy() or pgconn.status != ConnStatus.OK
+            or pgconn.transaction_status != TransactionStatus.IDLE
+            or pgconn.get_result() is not None):
+        raise OperationalError("Database connection is not idle and healthy")
+    last_probe = getattr(conn, _LAST_PROBE_ATTR, None)
+    if (last_probe is None
+            or monotonic() - last_probe >= settings.db_pool_check_interval_seconds):
+        ConnectionPool.check_connection(conn)
+        setattr(conn, _LAST_PROBE_ATTR, monotonic())
 
 
 def _configure_connection(conn) -> None:
@@ -41,7 +64,7 @@ def get_connection_pool() -> ConnectionPool:
                     timeout=settings.db_pool_timeout_seconds,
                     max_waiting=settings.db_pool_max_waiting,
                     kwargs={"connect_timeout": settings.db_connect_timeout_seconds},
-                    check=ConnectionPool.check_connection,
+                    check=_check_connection,
                     configure=_configure_connection,
                     open=True,
                 )

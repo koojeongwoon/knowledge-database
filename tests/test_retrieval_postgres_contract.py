@@ -16,6 +16,37 @@ from src.retrieval.infrastructure.retrieval_repository import PostgresRetrievalR
 
 @unittest.skipUnless(os.getenv("KNOWLEDGE_RETRIEVAL_SQL_TEST") == "1", "disposable SQL fixture only")
 class RetrievalPostgresContract(unittest.TestCase):
+    def test_hot_pool_rejects_terminated_backend_before_first_query(self):
+        import select
+        from unittest.mock import patch
+        import psycopg
+        from psycopg_pool import ConnectionPool
+        from src.core.database import connection
+        self.assertTrue(settings.db_host.startswith('codex-db-load-'))
+        self.assertEqual(settings.db_name, 'knowledge_bench')
+        original_probe = ConnectionPool.check_connection
+        with patch.object(settings, 'db_pool_check_interval_seconds', 30), \
+             patch.object(ConnectionPool, 'check_connection', wraps=original_probe) as probe:
+            with ConnectionPool(connection.DATABASE_URL, min_size=1, max_size=1, timeout=3,
+                                configure=connection._configure_connection,
+                                check=connection._check_connection) as pool:
+                pool.wait()
+                for _ in range(20):
+                    with pool.connection() as borrowed:
+                        pid = borrowed.info.backend_pid
+                        self.assertEqual(borrowed.execute('SELECT 42').fetchone(), (42,))
+                self.assertEqual(probe.call_count, 1)
+                with psycopg.connect(connection.DATABASE_URL, autocommit=True) as control:
+                    self.assertTrue(control.execute('SELECT pg_terminate_backend(%s)', (pid,)).fetchone()[0])
+                self.assertTrue(select.select([borrowed.fileno()], [], [], 5)[0])
+                # Even within the recent-probe window, the pool replaces the dead
+                # backend before exposing a connection to the first real query.
+                with pool.connection() as recovered:
+                    self.assertNotEqual(recovered.info.backend_pid, pid)
+                    self.assertEqual(recovered.execute('SELECT 42').fetchone(), (42,))
+                self.assertEqual(pool.get_stats()['pool_size'], 1)
+                self.assertEqual(probe.call_count, 2)
+
     def test_batched_search_writes_preserve_counts_owner_and_candidate_fields(self):
         from src.retrieval.feedback import SearchFeedbackService
         self.assertTrue(settings.db_host.startswith('codex-db-load-'))
