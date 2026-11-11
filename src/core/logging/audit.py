@@ -194,7 +194,8 @@ def _deliver_batch(bodies):
 
 
 worker = AuditDeliveryWorker(outbox, _deliver, diagnostics.report, deliver_batch=_deliver_batch,
-                             batch_size=settings.audit_delivery_batch_size)
+                             batch_size=settings.audit_delivery_batch_size,
+                             batch_window_seconds=settings.audit_delivery_batch_window_seconds)
 queue_handler = BoundedAuditQueueHandler(log_queue, outbox, worker, (file_handler, stream_handler), diagnostics)
 logger.addHandler(queue_handler)
 listener = BoundedAuditQueueListener(log_queue, file_handler, stream_handler, respect_handler_level=True)

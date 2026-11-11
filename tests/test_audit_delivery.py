@@ -139,6 +139,87 @@ def test_batch_acknowledgement_cannot_delete_another_workers_lease(tmp_path):
         outbox.close()
 
 
+def test_idle_batch_window_coalesces_durable_records_without_holding_outbox_lock(tmp_path):
+    outbox = AuditOutbox(tmp_path/'coalesce.sqlite3', 10000, 10)
+    idle, entered, release, delivered = Event(), Event(), Event(), Event()
+    batches = []
+    original_claim = outbox.claim_batch
+
+    def claim(*args):
+        rows = original_claim(*args)
+        if not rows:
+            idle.set()
+        return rows
+
+    def deliver(values):
+        batches.append([json.loads(value)['event_id'] for value in values])
+        delivered.set()
+
+    worker = AuditDeliveryWorker(outbox, Mock(), Mock(), deliver_batch=deliver,
+                                 batch_window_seconds=.05)
+    outbox.claim_batch = claim
+
+    def batch_wait(timeout):
+        assert timeout == .05
+        entered.set()
+        assert release.wait(1)
+        return worker._stop.is_set()
+
+    worker._stop.wait = batch_wait
+    worker.start()
+    try:
+        assert idle.wait(1)
+        assert outbox.put('a', body('a'))
+        worker.wake()
+        assert entered.wait(1)
+        # Persisting another request must work while the delivery timer waits.
+        assert outbox.put('b', body('b'))
+        assert outbox.usage()[0] == 2
+        worker.wake()
+        release.set()
+        assert delivered.wait(1)
+        assert batches[0] == ['a', 'b']
+    finally:
+        release.set()
+        assert worker.stop()
+        outbox.close()
+
+
+def test_shutdown_interrupts_batch_window_and_preserves_unclaimed_records(tmp_path):
+    outbox = AuditOutbox(tmp_path/'coalesce-stop.sqlite3', 10000, 10)
+    idle, entered = Event(), Event()
+    original_claim = outbox.claim_batch
+
+    def claim(*args):
+        rows = original_claim(*args)
+        if not rows:
+            idle.set()
+        return rows
+
+    worker = AuditDeliveryWorker(outbox, Mock(), Mock(), deliver_batch=Mock(),
+                                 batch_window_seconds=.5)
+    outbox.claim_batch = claim
+    original_wait = worker._stop.wait
+
+    def batch_wait(timeout):
+        entered.set()
+        return original_wait(timeout)
+
+    worker._stop.wait = batch_wait
+    worker.start()
+    try:
+        assert idle.wait(1)
+        assert outbox.put('a', body('a'))
+        worker.wake()
+        assert entered.wait(1)
+        assert worker.stop(timeout=.1)
+        assert outbox.usage()[0] == 1
+        worker.deliver_batch.assert_not_called()
+    finally:
+        worker.stop()
+        outbox.close()
+
+
 def test_postgres_audit_batch_is_one_atomic_insert_with_all_event_ids():
     connection = MagicMock(closed=False)
     handler = audit.PostgresAuditHandler(connect=Mock(return_value=connection))

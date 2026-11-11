@@ -66,15 +66,7 @@ class SearchFeedbackService:
                 self.ranking_config_version, self.ontology_version, len(snapshots),
             ))
             if snapshots:
-                candidate_sql = """
-                    INSERT INTO knowledge_search_candidates (
-                        search_id, owner_id, file_path, chunk_index, retrieval_sources,
-                        retrieval_kind, vector_score, lexical_score, rrf_score,
-                        reranker_score, pre_rule_rank, final_rank, exposed,
-                        relation_path, decision, score_components
-                    ) VALUES %s
-                """
-                values = []
+                candidates = []
                 for item in snapshots:
                     rank = item.get("rank")
                     relation_path = [{
@@ -82,24 +74,33 @@ class SearchFeedbackService:
                         "target": item.get("graph_target", ""),
                         "weight": item.get("graph_weight", 0.0),
                     }] if item.get("retrieval_kind") == "graph" else []
-                    values.append((
-                        search_id, owner_id, item.get("file_path"), item.get("matched_chunk_index"),
-                        item.get("search_sources", []), item.get("retrieval_kind", "direct"),
-                        item.get("vector_similarity", 0.0), item.get("lexical_rank", 0.0),
-                        item.get("rrf_score", 0.0), item.get("reranker_score"), rank, rank,
-                        True, json.dumps(relation_path), "include", json.dumps({
-                            "vector": item.get("vector_similarity", 0.0),
-                            "lexical": item.get("lexical_rank", 0.0),
-                            "rrf": item.get("rrf_score", 0.0),
-                        }),
-                    ))
-                cur.executemany(
-                    candidate_sql.replace(
-                        "VALUES %s",
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s::jsonb)",
-                    ),
-                    values,
-                )
+                    candidates.append({
+                        "file_path": item.get("file_path"), "chunk_index": item.get("matched_chunk_index"),
+                        "retrieval_sources": item.get("search_sources", []),
+                        "retrieval_kind": item.get("retrieval_kind", "direct"),
+                        "vector_score": item.get("vector_similarity", 0.0),
+                        "lexical_score": item.get("lexical_rank", 0.0),
+                        "rrf_score": item.get("rrf_score", 0.0),
+                        "reranker_score": item.get("reranker_score"), "rank": rank,
+                        "relation_path": relation_path,
+                        "score_components": {"vector": item.get("vector_similarity", 0.0),
+                                             "lexical": item.get("lexical_rank", 0.0),
+                                             "rrf": item.get("rrf_score", 0.0)},
+                    })
+                cur.execute("""
+                    INSERT INTO knowledge_search_candidates (
+                        search_id, owner_id, file_path, chunk_index, retrieval_sources,
+                        retrieval_kind, vector_score, lexical_score, rrf_score,
+                        reranker_score, pre_rule_rank, final_rank, exposed,
+                        relation_path, decision, score_components
+                    ) SELECT %s::uuid,%s,x.file_path,x.chunk_index,x.retrieval_sources,
+                        x.retrieval_kind,x.vector_score,x.lexical_score,x.rrf_score,
+                        x.reranker_score,x.rank,x.rank,TRUE,x.relation_path,'include',x.score_components
+                    FROM jsonb_to_recordset(%s::jsonb) AS x(
+                        file_path text,chunk_index int,retrieval_sources text[],retrieval_kind text,
+                        vector_score real,lexical_score real,rrf_score real,reranker_score real,
+                        rank int,relation_path jsonb,score_components jsonb)
+                """, (search_id, owner_id, json.dumps(candidates)))
         return search_id
 
     @staticmethod

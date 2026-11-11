@@ -122,14 +122,18 @@ class AuditOutbox:
 
 
 class AuditDeliveryWorker:
-    def __init__(self, outbox, deliver, report, *, deliver_batch=None, batch_size=20):
+    def __init__(self, outbox, deliver, report, *, deliver_batch=None, batch_size=20,
+                 batch_window_seconds=.05):
         if not 1 <= batch_size <= 100:
             raise ValueError("Audit delivery batch must be between 1 and 100")
+        if not 0 <= batch_window_seconds <= .5:
+            raise ValueError("Audit batch window must be between 0 and 0.5 seconds")
         self.outbox = outbox
         self.deliver = deliver
         self.report = report
         self.deliver_batch = deliver_batch
         self.batch_size = batch_size
+        self.batch_window_seconds = batch_window_seconds
         self.owner = uuid.uuid4().hex
         self._stop = Event()
         self._wake = Event()
@@ -177,6 +181,11 @@ class AuditDeliveryWorker:
                 self.report("outbox_worker_failed")
             self._wake.wait(0.5)
             self._wake.clear()
+            if self.deliver_batch is not None and self.batch_size > 1:
+                # Records are already durable. Coalesce only after idle; an
+                # existing backlog still drains full batches without this delay.
+                # Event.wait holds no SQLite lock and shutdown interrupts it.
+                self._stop.wait(self.batch_window_seconds)
 
     def stop(self, timeout: float = 1) -> bool:
         self._stop.set()
