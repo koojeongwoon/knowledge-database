@@ -1,4 +1,5 @@
 import unittest
+import json
 from datetime import datetime, timezone
 from contextlib import contextmanager
 
@@ -43,8 +44,13 @@ class SearchFeedbackTests(unittest.TestCase):
         event_params = manager.cursor_value.executed[0][1]
         self.assertIn("rank-v2", event_params)
         self.assertIn("ontology-v1", event_params)
-        self.assertEqual(len(manager.cursor_value.batch[0][1]), 1)
-        self.assertEqual(manager.cursor_value.batch[0][1][0][2], "qa/a.md")
+        self.assertEqual(len(manager.cursor_value.executed), 2)
+        candidate_params = manager.cursor_value.executed[1][1]
+        self.assertEqual(candidate_params[:2], (search_id, "owner"))
+        candidates = json.loads(candidate_params[2])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["file_path"], "qa/a.md")
+        self.assertEqual(candidates[0]["chunk_index"], 2)
 
     def test_no_answer_cannot_include_relevant_paths(self):
         service = SearchFeedbackService(db_manager=object())

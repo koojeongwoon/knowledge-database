@@ -196,14 +196,15 @@ class PostgresRetrievalRepository(BaseRetrievalRepository):
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         owner_id = self._get_owner_id()
         
-        query = """
-            INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at, owner_id)
-            VALUES %s
-            ON CONFLICT (owner_id, file_path) DO UPDATE SET
-                citation_count = knowledge_citations.citation_count + 1,
-                last_cited_at = EXCLUDED.last_cited_at;
-        """
-        values = [(path, 1, now, owner_id) for path in file_paths]
-        template = "(%s, %s, %s, %s)"
-        
-        self.db_manager.execute_batch(query, values, template=template)
+        # Collapse duplicates while preserving one increment per input occurrence.
+        # A stable row order also prevents opposite lock acquisition orders.
+        with self.db_manager.cursor() as cur:
+            cur.execute("""
+                INSERT INTO knowledge_citations (file_path, citation_count, last_cited_at, owner_id)
+                SELECT path, count(*)::int, %s::timestamptz, %s
+                FROM unnest(%s::text[]) AS paths(path)
+                GROUP BY path ORDER BY path
+                ON CONFLICT (owner_id, file_path) DO UPDATE SET
+                    citation_count = knowledge_citations.citation_count + EXCLUDED.citation_count,
+                    last_cited_at = EXCLUDED.last_cited_at
+            """, (now, owner_id, file_paths))

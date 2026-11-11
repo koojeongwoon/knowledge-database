@@ -16,6 +16,53 @@ from src.retrieval.infrastructure.retrieval_repository import PostgresRetrievalR
 
 @unittest.skipUnless(os.getenv("KNOWLEDGE_RETRIEVAL_SQL_TEST") == "1", "disposable SQL fixture only")
 class RetrievalPostgresContract(unittest.TestCase):
+    def test_batched_search_writes_preserve_counts_owner_and_candidate_fields(self):
+        from src.retrieval.feedback import SearchFeedbackService
+        self.assertTrue(settings.db_host.startswith('codex-db-load-'))
+        self.assertEqual(settings.db_name, 'knowledge_bench')
+        database = PostgresDatabaseManager()
+        owner, other = 'batch-'+uuid.uuid4().hex, 'other-'+uuid.uuid4().hex
+        token = current_user_config.set({'user_id': owner})
+        try:
+            repository = PostgresRetrievalRepository(database)
+            repository.increment_citation_count(['qa/b.md', 'qa/a.md', 'qa/a.md'])
+            repository.increment_citation_count(['qa/a.md'])
+            current_user_config.set({'user_id': other})
+            repository.increment_citation_count(['qa/a.md'])
+            with database.cursor() as cur:
+                cur.execute('SELECT owner_id,file_path,citation_count FROM knowledge_citations '
+                            'WHERE owner_id=ANY(%s) ORDER BY owner_id,file_path', ([owner,other],))
+                self.assertEqual(set(cur.fetchall()), {(owner,'qa/a.md',3), (owner,'qa/b.md',1),
+                                                      (other,'qa/a.md',1)})
+            search_id = SearchFeedbackService(database).record_event(owner, 'synthetic query', [{
+                'file_path':'qa/a.md','matched_chunk_index':2,'search_sources':['vector','keyword'],
+                'vector_similarity':.8,'rrf_score':1.0,'reranker_score':None,
+                'graph_context':[{'file_path':'qa/graph.md','retrieval_kind':'graph',
+                                  'graph_sources':['qa/a.md'],'graph_target':'graph','graph_weight':.5}],
+            }])
+            with database.cursor() as cur:
+                cur.execute('SELECT result_count,candidate_count FROM knowledge_search_events '
+                            'WHERE search_id=%s AND owner_id=%s', (search_id,owner))
+                self.assertEqual(cur.fetchone(), (2,2))
+                cur.execute('SELECT file_path,chunk_index,retrieval_sources,retrieval_kind,'
+                            'vector_score,reranker_score,final_rank,relation_path '
+                            'FROM knowledge_search_candidates WHERE search_id=%s AND owner_id=%s '
+                            'ORDER BY file_path', (search_id,owner))
+                direct, graph = cur.fetchall()
+                self.assertEqual(direct[:4], ('qa/a.md',2,['vector','keyword'],'direct'))
+                self.assertAlmostEqual(direct[4], .8, places=5)
+                self.assertEqual(direct[5:], (None,1,[]))
+                self.assertEqual(graph[0], 'qa/graph.md')
+                self.assertEqual(graph[3], 'graph')
+                self.assertIsNone(graph[6])
+                self.assertEqual(graph[7], [{'sources':['qa/a.md'],'target':'graph','weight':.5}])
+        finally:
+            current_user_config.reset(token)
+            with database.cursor() as cur:
+                cur.execute('DELETE FROM knowledge_search_events WHERE owner_id=ANY(%s)', ([owner,other],))
+                cur.execute('DELETE FROM knowledge_citations WHERE owner_id=ANY(%s)', ([owner,other],))
+            database.close()
+
     def test_identity_read_stays_fresh_without_rewriting_the_user(self):
         from src.api_keys.auth import AUTH_TOKEN_ISSUER, KNOWLEDGE_TENANT_ID
         from src.api.exceptions import DatabaseException
