@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     audit_statement_timeout_ms: int = Field(default=3000, ge=1, validation_alias="AUDIT_STATEMENT_TIMEOUT_MS")
     audit_lock_timeout_ms: int = Field(default=1000, ge=1, validation_alias="AUDIT_LOCK_TIMEOUT_MS")
     audit_delivery_batch_size: int = Field(default=20, ge=1, le=100, validation_alias="AUDIT_DELIVERY_BATCH_SIZE")
+    audit_delivery_batch_window_seconds: float = Field(
+        default=.05, ge=0, le=.5, validation_alias="AUDIT_DELIVERY_BATCH_WINDOW_SECONDS")
 
     audit_queue_size: int = Field(default=512, ge=1, validation_alias="AUDIT_QUEUE_SIZE")
     audit_record_max_bytes: int = Field(default=16384, ge=1024, validation_alias="AUDIT_RECORD_MAX_BYTES")
